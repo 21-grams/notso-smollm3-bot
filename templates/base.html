@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}NotSo-SmolLM3 Chat{% endblock %}</title>
+    
+    <!-- HTMX Core + Extensions -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/class-tools.js"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/loading-states.js"></script>
+    
+    <!-- CSS -->
+    <link rel="stylesheet" href="/static/css/main.css">
+    
+    {% block head %}{% endblock %}
+</head>
+<body hx-ext="sse,class-tools,loading-states">
+    <div class="app-container">
+        <header class="app-header">
+            <h1>🤖 NotSo-SmolLM3 Assistant</h1>
+            <div class="model-info">
+                <span class="badge">3B Parameters</span>
+                <span class="badge">Q4_K_M</span>
+                <span class="badge" 
+                      id="connection-status"
+                      hx-get="/status"
+                      hx-trigger="every 5s"
+                      hx-swap="innerHTML">Ready</span>
+            </div>
+        </header>
+        
+        <main class="app-main">
+            {% block content %}{% endblock %}
+        </main>
+        
+        <footer class="app-footer">
+            <p>Powered by Official Candle + HTMX + MiniJinja2</p>
+        </footer>
+    </div>
+    
+    <!-- Minimal JS only for clipboard -->
+    <script src="/static/js/minimal.js"></script>
+</body>
+</html>

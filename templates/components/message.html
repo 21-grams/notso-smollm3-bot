@@ -1,0 +1,59 @@
+{% if is_user %}
+<div class="message user-message fade-in" 
+     data-message-id="{{ message.id }}">
+    <div class="message-header">
+        <span class="message-role">You</span>
+        <span class="message-time">{{ message.timestamp }}</span>
+    </div>
+    <div class="message-content">
+        {{ message.content | escape_html }}
+    </div>
+</div>
+{% else %}
+<div class="message bot-message fade-in" 
+     data-message-id="{{ message.id }}"
+     id="bot-message-{{ message.id }}">
+    
+    <div class="message-header">
+        <span class="message-role">SmolLM3</span>
+        <span class="message-time">{{ message.timestamp }}</span>
+        {% if message.thinking_mode %}
+        <span class="badge badge-thinking">Thinking</span>
+        {% endif %}
+    </div>
+    
+    {% if message.thinking_mode %}
+    <div class="thinking-section" 
+         id="thinking-{{ message.id }}"
+         sse-swap="thinking-{{ message.id }}"
+         hx-swap="beforeend">
+        <div class="thinking-header">
+            <svg class="icon icon-thinking" viewBox="0 0 24 24">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
+            </svg>
+            <span>Reasoning Process</span>
+        </div>
+        <div class="thinking-content"
+             id="thinking-content-{{ message.id }}">
+            <!-- Thinking tokens stream here -->
+        </div>
+    </div>
+    {% endif %}
+    
+    <div class="message-content" 
+         id="content-{{ message.id }}"
+         sse-swap="message-{{ message.id }}">
+        <!-- Response tokens stream here -->
+    </div>
+    
+    <div class="message-actions">
+        <button class="btn-icon" 
+                onclick="copyToClipboard('content-{{ message.id }}')"
+                title="Copy">
+            <svg class="icon" viewBox="0 0 24 24">
+                <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+        </button>
+    </div>
+</div>
+{% endif %}

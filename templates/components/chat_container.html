@@ -1,0 +1,26 @@
+<div class="chat-container">
+    <!-- Message history -->
+    <div id="messages-wrapper" 
+         class="messages-wrapper"
+         hx-ext="sse"
+         sse-connect="/sse/connect/{{ session_id }}">
+        
+        <!-- Initial messages if any -->
+        {% for message in messages %}
+            {% include "components/message.html" %}
+        {% endfor %}
+        
+        <!-- Target for new messages -->
+        <div id="message-list"
+             hx-swap-oob="beforeend:this">
+        </div>
+    </div>
+    
+    <!-- Typing indicator (controlled by HTMX) -->
+    <div id="typing-indicator" 
+         class="typing-indicator htmx-indicator">
+        <span></span>
+        <span></span>
+        <span></span>
+    </div>
+</div>

@@ -1,6 +1,54 @@
 [package]
 name = "notso-smollm3-bot"
-version = "0.1.0"
-edition = "2024"
+version = "0.2.0"
+edition = "2021"
 
 [dependencies]
+# Core ML - Official Candle
+candle-core = { version = "0.9", default-features = false }
+candle-nn = { version = "0.9", default-features = false }
+candle-transformers = { version = "0.9", default-features = false }
+tokenizers = { version = "0.21", default-features = false }
+
+# Web Framework - Axum 0.8
+axum = { version = "0.8", features = ["macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tokio = { version = "1.42", features = ["full"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
+
+# Template Engine
+minijinja = { version = "2.3", features = ["loader"] }
+
+# SSE & Async
+futures = "0.3"
+tokio-stream = { version = "0.1", features = ["net"] }
+async-stream = "0.3"
+
+# Utilities
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Optional dependencies
+hf-hub = { version = "0.3", features = ["tokio"], optional = true }
+
+[features]
+default = []
+cuda = ["candle-core/cuda"]
+metal = ["candle-core/metal"] 
+download = ["hf-hub"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

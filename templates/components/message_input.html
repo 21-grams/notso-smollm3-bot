@@ -1,0 +1,59 @@
+<form id="chat-form"
+      class="chat-form"
+      hx-post="/chat/send"
+      hx-ext="sse"
+      sse-connect="/chat/send"
+      hx-trigger="submit"
+      hx-indicator="#typing-indicator"
+      hx-on::htmx:after-request="this.reset(); document.getElementById('message-input').focus()"
+      hx-on::htmx:after-settle="document.getElementById('messages-wrapper').scrollTop = document.getElementById('messages-wrapper').scrollHeight">
+    
+    <input type="hidden" name="session_id" value="{{ session_id }}">
+    
+    <div class="input-group">
+        <!-- Auto-expanding textarea using HTMX -->
+        <div class="textarea-wrapper">
+            <textarea 
+                id="message-input"
+                name="message"
+                class="message-input"
+                placeholder="Type your message..."
+                rows="1"
+                required
+                autofocus
+                hx-on::input="this.style.height = 'auto'; this.style.height = this.scrollHeight + 'px'"
+                hx-on::keydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); this.form.requestSubmit(); }"></textarea>
+        </div>
+        
+        <div class="input-actions">
+            <button type="submit" 
+                    class="btn btn-primary"
+                    id="send-button"
+                    data-loading-disable>
+                <svg class="icon" viewBox="0 0 24 24">
+                    <path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/>
+                </svg>
+                <span>Send</span>
+            </button>
+        </div>
+    </div>
+    
+    <div class="input-options">
+        <label class="checkbox-label">
+            <input type="checkbox" 
+                   name="thinking_mode" 
+                   value="true"
+                   {% if thinking_mode %}checked{% endif %}
+                   hx-post="/settings/thinking"
+                   hx-trigger="change"
+                   hx-target="#thinking-status"
+                   hx-swap="innerHTML"
+                   hx-vals='{"session_id": "{{ session_id }}"}'>
+            <span>Enable Thinking Mode</span>
+        </label>
+        
+        <span id="thinking-status" class="status-text">
+            {% if thinking_mode %}Thinking enabled{% else %}Thinking disabled{% endif %}
+        </span>
+    </div>
+</form>
