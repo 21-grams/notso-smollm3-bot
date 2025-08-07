@@ -1,12 +1,13 @@
-pub mod handlers;
-pub mod model;
-pub mod templates;
-
-// New modules for Phase 2
+// Core modules
 pub mod config;
+pub mod state;
+pub mod services;
+pub mod types;
+pub mod web;
+pub mod smollm3;
 pub mod inference;
-pub mod tokenizer;
-pub mod cache;
 
-pub use model::SmolLM3Service;
-pub use templates::TemplateEngine;
+// Re-exports
+pub use state::AppState;
+pub use services::template::engine::TemplateEngine;
+pub use services::ml::service::MLService;

@@ -8,7 +8,7 @@ edition = "2021"
 candle-core = { version = "0.9", default-features = false }
 candle-nn = { version = "0.9", default-features = false }
 candle-transformers = { version = "0.9", default-features = false }
-tokenizers = { version = "0.21", default-features = false }
+tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 
 # Web Framework - Axum 0.8
 axum = { version = "0.8", features = ["macros"] }

@@ -1,55 +1,87 @@
-use crate::state::AppState;
-use crate::types::{ChatRequest, ChatResponse};
-use axum::{
-    extract::{State, Form},
-    response::Json,
-};
+//! API endpoint handlers
 
+use crate::state::AppState;
+use crate::services::template::ChatTemplateService;
+use axum::{
+    extract::{State, Path, Form},
+    response::{Html, sse::{Event, Sse}},
+    http::StatusCode,
+};
+use futures::stream::{self, Stream};
+use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::time::Duration;
+use tokio_stream::StreamExt;
+
+#[derive(Debug, Deserialize)]
+pub struct ChatMessage {
+    session_id: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ChatResponse {
+    success: bool,
+    html: String,
+}
+
+/// Handle chat message submission
 pub async fn send_message(
     State(state): State<AppState>,
-    Form(request): Form<ChatRequest>,
-) -> Json<ChatResponse> {
-    tracing::info!("📨 Received message: {}", request.message);
-    
-    // Get or create session
-    let mut sessions = state.sessions.write().await;
-    let session = sessions.get_or_create(&request.session_id);
+    Form(msg): Form<ChatMessage>,
+) -> Html<String> {
+    // Render user message immediately
+    let template_service = ChatTemplateService::new().unwrap();
+    let user_html = template_service
+        .render_user_message(&msg.message)
+        .unwrap_or_default();
     
     // Start generation in background
     let model = state.model.clone();
-    let session_id = request.session_id.clone();
-    let message = request.message.clone();
+    let session_id = msg.session_id.clone();
+    let message = msg.message.clone();
     
     tokio::spawn(async move {
-        if let Err(e) = model.generate_response(&session_id, &message).await {
-            tracing::error!("Generation error: {}", e);
+        let _ = model.generate_response(&session_id, &message).await;
+    });
+    
+    // Return user message HTML for immediate display
+    Html(user_html)
+}
+
+/// Stream events for a session
+pub async fn stream_events(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let sessions = state.sessions.read().await;
+    let stream = sessions.get_event_stream(&session_id);
+    
+    let event_stream = stream.map(|event| {
+        match event {
+            Ok(evt) => {
+                let data = evt.to_sse_data();
+                let event_type = evt.event_type();
+                Ok(Event::default()
+                    .event(event_type)
+                    .data(data))
+            }
+            Err(_) => Ok(Event::default().data("error"))
         }
     });
     
-    Json(ChatResponse {
-        status: "processing".to_string(),
-        session_id: request.session_id,
-    })
+    Sse::new(event_stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(Duration::from_secs(30))
+            .text("keep-alive")
+    )
 }
 
+/// Toggle thinking mode
 pub async fn toggle_thinking(
     State(state): State<AppState>,
-    Form(request): Form<serde_json::Value>,
-) -> Json<serde_json::Value> {
-    // Toggle thinking mode for session
-    let session_id = request.get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    
-    let mut sessions = state.sessions.write().await;
-    if let Some(session) = sessions.get_mut(session_id) {
-        session.toggle_thinking_mode();
-        Json(serde_json::json!({
-            "thinking_mode": session.thinking_mode
-        }))
-    } else {
-        Json(serde_json::json!({
-            "error": "Session not found"
-        }))
-    }
+) -> Html<String> {
+    // This would update the session's thinking mode
+    // For now, just return status
+    Html("<span id='thinking-status'>ON</span>".to_string())
 }

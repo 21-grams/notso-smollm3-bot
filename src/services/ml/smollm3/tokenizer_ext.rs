@@ -1,0 +1,138 @@
+//! Extended tokenizer functionality for SmolLM3
+
+use tokenizers::Tokenizer;
+use anyhow::Result;
+
+pub struct SmolLM3TokenizerExt {
+    tokenizer: Tokenizer,
+    special_tokens: SpecialTokens,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpecialTokens {
+    pub bos: u32,           // <|begin_of_text|>
+    pub eos: u32,           // <|end_of_text|>
+    pub thinking_start: u32, // <think>
+    pub thinking_end: u32,   // </think>
+    pub tool_start: u32,     // <tool>
+    pub tool_end: u32,       // </tool>
+}
+
+impl Default for SpecialTokens {
+    fn default() -> Self {
+        Self {
+            bos: 128000,
+            eos: 128001,
+            thinking_start: 128002,
+            thinking_end: 128003,
+            tool_start: 128004,
+            tool_end: 128005,
+        }
+    }
+}
+
+impl SmolLM3TokenizerExt {
+    pub fn new(tokenizer: Tokenizer) -> Self {
+        Self {
+            tokenizer,
+            special_tokens: SpecialTokens::default(),
+        }
+    }
+    
+    /// Encode with special token handling
+    pub fn encode_with_special(&self, text: &str, add_special: bool) -> Result<Vec<u32>> {
+        let encoding = self.tokenizer.encode(text, add_special)?;
+        Ok(encoding.get_ids().to_vec())
+    }
+    
+    /// Decode with special token filtering
+    pub fn decode_filtered(&self, ids: &[u32], skip_special: bool) -> Result<String> {
+        if skip_special {
+            let filtered: Vec<u32> = ids.iter()
+                .filter(|&&id| !self.is_special_token(id))
+                .copied()
+                .collect();
+            Ok(self.tokenizer.decode(&filtered, false)?)
+        } else {
+            Ok(self.tokenizer.decode(ids, false)?)
+        }
+    }
+    
+    fn is_special_token(&self, id: u32) -> bool {
+        id == self.special_tokens.bos ||
+        id == self.special_tokens.eos ||
+        id == self.special_tokens.thinking_start ||
+        id == self.special_tokens.thinking_end ||
+        id == self.special_tokens.tool_start ||
+        id == self.special_tokens.tool_end
+    }
+    
+    pub fn special_tokens(&self) -> &SpecialTokens {
+        &self.special_tokens
+    }
+    
+    /// Apply SmolLM3 chat template
+    pub fn apply_chat_template(
+        &self,
+        messages: &[ChatMessage],
+        add_generation_prompt: bool,
+        reasoning_mode: ReasoningMode,
+    ) -> Result<String> {
+        let mut formatted = String::new();
+        
+        // System message
+        formatted.push_str("<|im_start|>system\n");
+        formatted.push_str("You are SmolLM3, a helpful AI assistant.\n");
+        formatted.push_str("<|im_end|>\n");
+        
+        // Messages
+        for msg in messages {
+            match msg.role.as_str() {
+                "user" => {
+                    formatted.push_str("<|im_start|>user\n");
+                    formatted.push_str(&msg.content);
+                    formatted.push_str("\n<|im_end|>\n");
+                }
+                "assistant" => {
+                    formatted.push_str("<|im_start|>assistant\n");
+                    
+                    // Add thinking tokens if in thinking mode
+                    if reasoning_mode == ReasoningMode::Think {
+                        if let Some(thinking) = &msg.thinking_content {
+                            formatted.push_str("<think>\n");
+                            formatted.push_str(thinking);
+                            formatted.push_str("\n</think>\n");
+                        }
+                    }
+                    
+                    formatted.push_str(&msg.content);
+                    formatted.push_str("\n<|im_end|>\n");
+                }
+                _ => {}
+            }
+        }
+        
+        // Add generation prompt
+        if add_generation_prompt {
+            formatted.push_str("<|im_start|>assistant\n");
+            if reasoning_mode == ReasoningMode::Think {
+                formatted.push_str("<think>\n");
+            }
+        }
+        
+        Ok(formatted)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+    pub thinking_content: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReasoningMode {
+    Think,
+    NoThink,
+}

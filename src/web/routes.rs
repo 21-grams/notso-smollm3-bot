@@ -3,22 +3,24 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use tower_http::services::ServeDir;
 
 pub fn create_routes(state: AppState) -> Router {
     Router::new()
-        // Page routes
-        .route("/", get(crate::web::handlers::chat::index))
-        .route("/chat", get(crate::web::handlers::chat::chat_page))
+        // Static files (CSS, JS, images)
+        .nest_service("/static", ServeDir::new("src/web/static"))
         
-        // API routes
-        .route("/api/chat/send", post(crate::web::handlers::api::send_message))
-        .route("/api/chat/thinking", post(crate::web::handlers::api::toggle_thinking))
+        // Pages
+        .route("/", get(super::handlers::chat::index))
+        .route("/chat", get(super::handlers::chat::chat_page))
         
-        // SSE streaming
-        .route("/sse/:session_id", get(crate::web::sse::stream_events))
+        // API endpoints
+        .route("/api/chat", post(super::handlers::api::send_message))
+        .route("/api/stream/:session_id", get(super::handlers::api::stream_events))
+        .route("/api/toggle-thinking", post(super::handlers::api::toggle_thinking))
         
         // Health check
-        .route("/health", get(crate::web::handlers::health::health_check))
+        .route("/health", get(super::handlers::health::health_check))
         
         .with_state(state)
 }

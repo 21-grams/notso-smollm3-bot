@@ -1,9 +1,9 @@
 use crate::state::AppState;
+use crate::services::template::TemplateEngine;
 use axum::{
     extract::State,
     response::Html,
 };
-use minijinja::{context, Environment};
 use uuid::Uuid;
 
 pub async fn index(State(state): State<AppState>) -> Html<String> {
@@ -13,14 +13,11 @@ pub async fn index(State(state): State<AppState>) -> Html<String> {
     state.sessions.write().await.create_session(&session_id);
     
     // Render template
-    let mut env = Environment::new();
-    env.set_loader(minijinja::path_loader("src/web/templates"));
-    
-    let template = env.get_template("chat.html").unwrap();
-    let html = template.render(context! {
-        session_id => session_id,
-        thinking_mode => state.config.thinking_mode_default,
-    }).unwrap();
+    let engine = TemplateEngine::new().expect("Failed to create template engine");
+    let html = engine.render_chat_page(&session_id, state.config.thinking_mode_default)
+        .unwrap_or_else(|e| {
+            format!("<html><body><h1>Error: {}</h1></body></html>", e)
+        });
     
     Html(html)
 }
