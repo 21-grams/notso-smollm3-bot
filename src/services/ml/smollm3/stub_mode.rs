@@ -1,6 +1,6 @@
 use anyhow::Result;
 use tokio::sync::mpsc::UnboundedSender;
-use crate::types::events::GenerationEvent;
+use crate::services::ml::streaming::GenerationEvent;
 use tokio::time::{sleep, Duration};
 
 /// Stub mode service for testing without models

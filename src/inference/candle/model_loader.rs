@@ -1,6 +1,7 @@
 use candle_core::{Device, Result};
 use candle_core::quantized::{gguf_file, GgmlDType};
-use candle_transformers::models::quantized_llama::{Llama, ModelWeights, LlamaConfig};
+use candle_transformers::models::llama::{Llama, Config as LlamaConfig, LlamaEosToks};
+use candle_transformers::models::quantized_llama::ModelWeights;
 use std::fs::File;
 
 pub struct ModelLoader;
@@ -18,25 +19,34 @@ impl ModelLoader {
         // Load weights using official API
         let weights = ModelWeights::from_gguf(content, &mut file, device)?;
         
-        // Create config for SmolLM3
+        // Create config for SmolLM3 - only include fields that exist
         let config = LlamaConfig {
             vocab_size: 128256,
             hidden_size: 2048,
-            n_layer: 36,
-            n_head: 16,
-            n_kv_head: 4,  // GQA 4:1
+            num_hidden_layers: 36,
+            num_attention_heads: 16,
+            num_key_value_heads: 4,  // GQA 4:1
             intermediate_size: 11008,
-            max_seq_len: 65536,
             rope_theta: 2_000_000.0,
             rms_norm_eps: 1e-5,
-            ..Default::default()
+            max_position_embeddings: 65536,
+            bos_token_id: Some(0),
+            eos_token_id: Some(LlamaEosToks::Single(2)),
+            use_flash_attn: false,
+            tie_word_embeddings: false,
+            rope_scaling: None,
         };
         
-        // Load model
-        let model = Llama::load(&weights, &config, device)?;
+        // Note: The actual loading of quantized models in Candle is complex
+        // For now, we'll need to implement a proper quantized loader
+        // This is a placeholder that won't work with the current API
+        return Err(anyhow::anyhow!("Quantized model loading needs proper implementation"));
         
-        tracing::info!("✅ Model loaded successfully with Q4_K_M quantization");
-        Ok(model)
+        // TODO: Implement proper quantized model loading
+        // Options:
+        // 1. Use candle's quantized model directly
+        // 2. Dequantize weights and load as regular model (memory intensive)
+        // 3. Implement custom quantized forward pass
     }
     
     fn validate_q4km(content: &gguf_file::Content) -> Result<()> {

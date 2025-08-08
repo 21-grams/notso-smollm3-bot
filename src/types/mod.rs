@@ -1,7 +1,7 @@
-mod errors;
-mod events;
-mod message;
-mod session;
+pub mod errors;
+pub mod events;
+pub mod message;
+pub mod session;
 
 pub use errors::AppError;
 pub use events::StreamEvent;

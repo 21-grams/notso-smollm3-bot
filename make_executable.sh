@@ -1,2 +1,4 @@
 #!/bin/bash
-chmod +x test_build.sh
+chmod +x *.sh
+echo "✅ All scripts are now executable"
+ls -la *.sh

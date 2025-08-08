@@ -18,8 +18,12 @@ pub async fn start_server(state: AppState) -> anyhow::Result<()> {
 
 fn create_app(state: AppState) -> Router {
     Router::new()
+        // Merge application routes (pages and API endpoints)
         .merge(crate::web::routes::create_routes(state.clone()))
+        // Serve static files (CSS, JS, images) from src/web/static
         .nest_service("/static", ServeDir::new("src/web/static"))
+        // Add tracing middleware for HTTP requests
         .layer(TraceLayer::new_for_http())
+        // Add CORS middleware
         .layer(crate::web::middleware::cors_layer())
 }

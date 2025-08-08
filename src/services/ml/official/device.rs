@@ -29,8 +29,8 @@ impl DeviceManager {
     pub fn device_info(device: &Device) -> String {
         match device {
             Device::Cpu => "CPU".to_string(),
-            Device::Cuda(gpu) => format!("CUDA GPU {}", gpu.ordinal()),
-            Device::Metal(gpu) => format!("Metal GPU {}", gpu.ordinal()),
+            Device::Cuda(_) => "CUDA GPU".to_string(),
+            Device::Metal(_) => "Metal GPU".to_string(),
         }
     }
     

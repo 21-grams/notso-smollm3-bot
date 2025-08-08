@@ -1,0 +1,210 @@
+/* Smooth streaming animation styles */
+
+/* Typing indicator animation */
+.typing-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 8px 12px;
+    color: var(--text-secondary);
+}
+
+.typing-indicator span {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--primary-color);
+    animation: typing-bounce 1.4s infinite ease-in-out;
+}
+
+.typing-indicator span:nth-child(1) {
+    animation-delay: -0.32s;
+}
+
+.typing-indicator span:nth-child(2) {
+    animation-delay: -0.16s;
+}
+
+@keyframes typing-bounce {
+    0%, 80%, 100% {
+        transform: scale(0.8);
+        opacity: 0.5;
+    }
+    40% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* Smooth text appearance */
+.message-bubble {
+    transition: all 0.15s ease-out;
+    transform-origin: top left;
+}
+
+/* New content animation - subtle fade in */
+.message-bubble > span {
+    animation: content-fade-in 0.2s ease-out;
+}
+
+@keyframes content-fade-in {
+    from {
+        opacity: 0.7;
+    }
+    to {
+        opacity: 1;
+    }
+}
+
+/* Smooth scrolling for chat container */
+.chat-messages {
+    scroll-behavior: smooth;
+    scroll-padding-bottom: 20px;
+}
+
+/* Message appearance animation */
+.message {
+    animation: message-slide-in 0.3s ease-out;
+    transform-origin: bottom left;
+}
+
+@keyframes message-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.98);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+/* Streaming state indicator */
+.message[data-streaming="true"] .message-bubble {
+    position: relative;
+    min-height: 40px;
+}
+
+.message[data-streaming="true"] .message-bubble::after {
+    content: "";
+    position: absolute;
+    bottom: 8px;
+    right: 12px;
+    width: 2px;
+    height: 16px;
+    background: var(--primary-color);
+    animation: cursor-blink 1s infinite;
+}
+
+@keyframes cursor-blink {
+    0%, 50% {
+        opacity: 1;
+    }
+    51%, 100% {
+        opacity: 0;
+    }
+}
+
+/* Word-by-word appearance effect */
+.streaming-word {
+    display: inline-block;
+    animation: word-appear 0.1s ease-out;
+}
+
+@keyframes word-appear {
+    from {
+        opacity: 0;
+        transform: translateY(2px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Completion animation */
+.message[data-complete="true"] .message-bubble::after {
+    display: none;
+}
+
+.message[data-complete="true"] {
+    animation: complete-pulse 0.3s ease-out;
+}
+
+@keyframes complete-pulse {
+    0% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.01);
+    }
+    100% {
+        transform: scale(1);
+    }
+}
+
+/* Error state */
+.message.error .message-bubble {
+    border-color: var(--error-color);
+    background: var(--error-bg);
+    animation: error-shake 0.3s ease-out;
+}
+
+@keyframes error-shake {
+    0%, 100% {
+        transform: translateX(0);
+    }
+    25% {
+        transform: translateX(-5px);
+    }
+    75% {
+        transform: translateX(5px);
+    }
+}
+
+/* Smooth height transitions for growing content */
+.message-bubble {
+    transition: height 0.15s ease-out;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    hyphens: auto;
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+    .typing-indicator span {
+        width: 6px;
+        height: 6px;
+    }
+    
+    @keyframes message-slide-in {
+        from {
+            opacity: 0;
+            transform: translateY(5px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+}
+
+/* Reduce motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+    .typing-indicator span {
+        animation: none;
+        opacity: 0.7;
+    }
+    
+    .message,
+    .message-bubble,
+    .streaming-word {
+        animation: none;
+    }
+    
+    .message-bubble::after {
+        animation: none;
+        opacity: 1;
+    }
+}

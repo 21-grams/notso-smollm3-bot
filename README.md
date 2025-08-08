@@ -16,13 +16,40 @@ Production-ready SmolLM3 chatbot using Candle.rs with a clean 3-tier architectur
 └──────────────────────┬──────────────────────────────────┘
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│               ML Foundation Layer                        │
-│    ┌──────────────┐  ┌─────────────┐  ┌──────────────┐ │
-│    │   Official   │  │   SmolLM3   │  │  Streaming   │ │
-│    │    Candle    │  │ Extensions  │  │   Pipeline   │ │
-│    └──────────────┘  └─────────────┘  └──────────────┘ │
+│             Inference Foundation Layer                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │  Low-level   │  │  Generation  │  │   Services   │  │
+│  │   Candle     │  │     Loop     │  │  ML/SmolLM3  │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
+
+## 🚀 Latest Update (Phase: Web Server Route Fix)
+
+### **Fixed Route Conflict Issue** ✅
+Resolved the Axum router conflict where `/static` route was being registered twice:
+
+**Problem**: 
+```
+thread 'main' panicked at src/web/server.rs:22:10:
+Invalid route "/static/{*__private__axum_nest_tail_param}":
+Insertion failed due to conflict with previously registered route
+```
+
+**Root Cause**:
+- Static file route was defined in both `routes.rs` and `server.rs`
+- Axum doesn't allow duplicate route patterns
+
+**Solution**:
+1. Removed duplicate `/static` registration from `src/web/routes.rs`
+2. Kept single registration in `src/web/server.rs` for clarity
+3. Added documentation comments for middleware stack order
+4. Created `/doc/routing-architecture.md` for routing best practices
+
+### **Architecture Improvements**
+- **Clear Separation**: Static files served at app level, application routes in dedicated module
+- **Single Responsibility**: Each module handles specific route types
+- **Documentation**: Added routing architecture guide for future reference
 
 ## 📁 Project Structure & File Descriptions
 
@@ -39,6 +66,19 @@ notso-smollm3-bot/
 │   └── [*.gguf, *.json]         # Model and tokenizer files
 │
 ├── src/
+│   ├── inference/                # Inference Foundation Layer [NEW]
+│   │   ├── candle/              # Low-level Candle operations
+│   │   │   ├── device.rs        # Device management & memory tracking
+│   │   │   ├── kv_cache.rs      # KV cache tensor operations
+│   │   │   ├── tensor_ops.rs    # Common tensor utilities
+│   │   │   ├── model_loader.rs  # GGUF model loading
+│   │   │   ├── quantized_ops.rs # Quantized operations
+│   │   │   └── mod.rs           # Module exports
+│   │   │
+│   │   ├── generation.rs        # Core generation loop
+│   │   ├── engine.rs            # Inference engine orchestration
+│   │   └── mod.rs               # Inference exports
+│   │
 │   ├── web/                      # Web Layer - Self-contained UI
 │   │   ├── static/
 │   │   │   ├── css/
@@ -50,7 +90,7 @@ notso-smollm3-bot/
 │   │   ├── templates/
 │   │   │   ├── base.html       # Base template with layout
 │   │   │   ├── chat.html       # Main chat interface
-│   │   │   └── partials/       # Reusable components
+│   │   │   └── components/     # Reusable components
 │   │   │
 │   │   ├── handlers/            # HTTP Request Handlers
 │   │   │   ├── mod.rs          # Module exports
@@ -70,14 +110,14 @@ notso-smollm3-bot/
 │   │   │   │   ├── model.rs    # OfficialSmolLM3Model - quantized_llama wrapper
 │   │   │   │   ├── config.rs   # SmolLM3Config - model parameters
 │   │   │   │   ├── loader.rs   # OfficialLoader - GGUF file loading
-│   │   │   │   ├── device.rs   # DeviceManager - CUDA/CPU detection
+│   │   │   │   ├── device.rs   # DeviceManager - high-level device selection
 │   │   │   │   └── mod.rs      # Module exports
 │   │   │   │
 │   │   │   ├── smollm3/         # SmolLM3-Specific Extensions
 │   │   │   │   ├── adapter.rs      # SmolLM3Adapter - bridges to official
-│   │   │   │   ├── generation.rs   # SmolLM3Generator - token generation
+│   │   │   │   ├── generation.rs   # SmolLM3Generator - uses inference layer
 │   │   │   │   ├── thinking.rs     # ThinkingDetector - <think> token handling
-│   │   │   │   ├── kv_cache.rs     # KVCache - 4-group GQA optimization
+│   │   │   │   ├── kv_cache.rs     # KVCache - SmolLM3-specific cache logic
 │   │   │   │   ├── nope_layers.rs  # NopeHandler - NoPE layer management
 │   │   │   │   ├── tokenizer_ext.rs # SmolLM3TokenizerExt - chat templates
 │   │   │   │   ├── stub_mode.rs    # StubModeService - testing without models
@@ -94,22 +134,27 @@ notso-smollm3-bot/
 │   │   │
 │   │   ├── template/            # Template Rendering
 │   │   │   ├── engine.rs       # TemplateEngine - MiniJinja setup
-│   │   │   ├── filters.rs      # Custom filters (markdown, datetime)
+│   │   │   ├── chat.rs         # Chat-specific templates
 │   │   │   └── mod.rs          # Module exports
 │   │   │
-│   │   ├── session/             # Session Management
-│   │   │   ├── manager.rs      # SessionManager - in-memory sessions
-│   │   │   ├── store.rs        # SessionStore - persistence layer
-│   │   │   └── mod.rs          # Module exports
-│   │   │
-│   │   └── mod.rs               # Services module exports
+│   │   ├── session.rs          # Session management
+│   │   ├── streaming.rs        # Streaming service
+│   │   ├── metrics.rs          # Performance metrics
+│   │   └── mod.rs              # Services module exports
 │   │
 │   ├── types/                   # Shared Type Definitions
 │   │   ├── events.rs           # StreamEvent, GenerationEvent types
 │   │   ├── message.rs          # Message, ChatMessage structures
 │   │   ├── session.rs          # Session, ChatSession types
-│   │   ├── config.rs           # AppConfig, ModelConfig types
+│   │   ├── errors.rs           # Error types
 │   │   └── mod.rs              # Type exports
+│   │
+│   ├── smollm3/                # SmolLM3 model core
+│   │   ├── model.rs            # Model implementation
+│   │   ├── config.rs           # Model configuration
+│   │   ├── tokenizer.rs        # Tokenizer handling
+│   │   ├── chat_template.rs    # Chat formatting
+│   │   └── mod.rs              # Module exports
 │   │
 │   ├── config.rs                # Application configuration
 │   ├── state.rs                 # AppState - shared application state
@@ -130,7 +175,7 @@ notso-smollm3-bot/
 
 ## 🎯 Logical Organization
 
-### **Separation of Concerns**
+### **Three-Tier Architecture**
 
 1. **Web Layer** (`/src/web`)
    - Self-contained UI with all assets
@@ -144,10 +189,10 @@ notso-smollm3-bot/
    - Session and state management
    - Template rendering
 
-3. **ML Foundation** (`/src/services/ml`)
-   - **Official**: Pure Candle.rs wrappers
-   - **SmolLM3**: Model-specific features
-   - **Streaming**: Real-time generation
+3. **Inference Foundation** (`/src/inference`)
+   - **Candle**: Low-level tensor operations
+   - **Generation**: Core generation loop
+   - **Engine**: Inference orchestration
 
 ### **Key Design Principles**
 
@@ -182,6 +227,7 @@ cargo build --release
 - **Context**: 2048 tokens (expandable to 32K)
 - **Layers**: 36 with NoPE on layers [3,7,11,15,19,23,27,31,35]
 - **Performance**: Target 1-2 tok/s
+- **Memory**: ~2GB GPU RAM with KV cache
 
 ### Environment Variables
 ```bash
@@ -200,18 +246,24 @@ PORT=3000                       # Server port
 - ML foundation structure
 - Session management
 - Template engine
+- **Inference layer (NEW)**
+  - Device management
+  - KV cache operations
+  - Tensor utilities
+  - Generation loop
 
 ### 🚧 In Progress
-- Model integration
-- Generation pipeline
+- Model integration with inference layer
+- Generation pipeline optimization
 - Tool use system
 - Follow-up suggestions
 
 ### 📋 Planned
-- Context management
+- Context management improvements
 - Performance optimization
 - Persistent sessions
 - Multi-model support
+- Distributed inference
 
 ## 📚 Documentation
 
@@ -219,6 +271,25 @@ PORT=3000                       # Server port
 - `/doc/implementation_status.md` - Detailed progress tracking
 - `/doc/candle_reference.md` - Candle.rs usage patterns
 - `/doc/ui_ux_interaction.md` - User interaction flow
+
+## 🛠️ Development Commands
+
+```bash
+# Build with all features
+cargo build --release
+
+# Run with environment setup
+./run.sh
+
+# Test compilation only
+./test_compilation.sh
+
+# Fix common issues
+./fix_compilation.sh
+
+# Make all scripts executable
+./make_all_executable.sh
+```
 
 ## 📄 License
 

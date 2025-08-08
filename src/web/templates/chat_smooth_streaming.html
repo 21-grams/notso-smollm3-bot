@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmolLM3 Chat - Smooth Streaming</title>
+    <link rel="stylesheet" href="/static/css/chat-minimal.css">
+    <link rel="stylesheet" href="/static/css/streaming.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>SmolLM3 Chat</h1>
+            <div class="system-status">
+                <span class="status-badge">Ready</span>
+            </div>
+        </div>
+        
+        <!-- Chat messages area with SSE for smooth streaming -->
+        <div class="chat-messages" 
+             id="chat-messages"
+             hx-ext="sse"
+             sse-connect="/api/stream/smooth/{{ session_id }}">
+            
+            <!-- Initial greeting -->
+            <div class="message assistant" data-complete="true">
+                <div class="message-bubble">
+                    Hello! I'm SmolLM3, ready to help. How can I assist you today?
+                </div>
+            </div>
+            
+            <!-- SSE targets for different event types -->
+            <!-- message-start: New message container -->
+            <div id="message-container" 
+                 sse-swap="message-start"
+                 hx-swap="beforeend"></div>
+            
+            <!-- token: Streaming content updates (uses hx-swap-oob) -->
+            <div sse-swap="token"></div>
+            
+            <!-- complete: Final message state -->
+            <div sse-swap="complete"></div>
+            
+            <!-- error: Error messages -->
+            <div sse-swap="error" hx-swap="beforeend"></div>
+        </div>
+        
+        <div class="chat-input">
+            <!-- Input controls -->
+            <div class="input-controls">
+                <label class="thinking-toggle">
+                    <input type="checkbox" 
+                           hx-post="/api/toggle-thinking"
+                           hx-trigger="change"
+                           hx-vals='{"session_id": "{{ session_id }}"}'
+                           hx-swap="none"
+                           {% if thinking_mode %}checked{% endif %}>
+                    <span class="toggle-switch"></span>
+                    <span>Thinking Mode</span>
+                </label>
+                
+                <div class="context-indicator">
+                    <span id="token-counter">0 / 2048 tokens</span>
+                </div>
+            </div>
+            
+            <!-- Chat form - pure HTMX -->
+            <form hx-post="/api/chat"
+                  hx-target="#message-container"
+                  hx-swap="beforeend"
+                  hx-on::after-request="this.reset(); this.querySelector('textarea').focus()">
+                <input type="hidden" name="session_id" value="{{ session_id }}">
+                
+                <textarea 
+                    name="message"
+                    placeholder="Type your message..."
+                    required
+                    autofocus
+                    rows="1"
+                    style="resize: none; overflow: hidden;"
+                    hx-on::input="this.style.height='auto'; this.style.height=this.scrollHeight+'px'"
+                    hx-on::keydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); this.form.requestSubmit()}"></textarea>
+                
+                <button type="submit">Send</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Minimal JS for auto-scroll only -->
+    <script>
+        // Auto-scroll to bottom when new content is added
+        const observer = new MutationObserver(() => {
+            const messages = document.getElementById('chat-messages');
+            // Only scroll if user is near bottom (within 100px)
+            if (messages.scrollHeight - messages.scrollTop - messages.clientHeight < 100) {
+                messages.scrollTop = messages.scrollHeight;
+            }
+        });
+        
+        observer.observe(document.getElementById('chat-messages'), {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+    </script>
+</body>
+</html>

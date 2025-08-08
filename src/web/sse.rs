@@ -20,9 +20,14 @@ pub async fn stream_events(
     
     let stream = receiver
         .map(|event| {
-            Ok(Event::default()
-                .event(&event.event_type())
-                .data(event.to_sse_data()))
+            match event {
+                Ok(evt) => Ok(Event::default()
+                    .event(evt.event_type())
+                    .data(evt.to_sse_data())),
+                Err(e) => Ok(Event::default()
+                    .event("error")
+                    .data(format!("Stream error: {}", e)))
+            }
         });
     
     Sse::new(stream)

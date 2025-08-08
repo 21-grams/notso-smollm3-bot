@@ -27,8 +27,9 @@ impl KVCache {
     
     /// Update cache for a layer
     pub fn update(&mut self, layer_idx: usize, keys: Tensor, values: Tensor) -> Result<()> {
+        let keys_dim = keys.dim(1)?;
         self.cache.insert(layer_idx, (keys, values));
-        self.current_length = keys.dim(1)?;
+        self.current_length = keys_dim;
         Ok(())
     }
     
@@ -41,8 +42,8 @@ impl KVCache {
     pub fn extend(&mut self, layer_idx: usize, new_keys: Tensor, new_values: Tensor) -> Result<()> {
         if let Some((keys, values)) = self.cache.get_mut(&layer_idx) {
             // Concatenate along sequence dimension
-            *keys = Tensor::cat(&[keys, &new_keys], 1)?;
-            *values = Tensor::cat(&[values, &new_values], 1)?;
+            *keys = Tensor::cat(&[&keys.clone(), &new_keys], 1)?;
+            *values = Tensor::cat(&[&values.clone(), &new_values], 1)?;
         } else {
             self.cache.insert(layer_idx, (new_keys, new_values));
         }

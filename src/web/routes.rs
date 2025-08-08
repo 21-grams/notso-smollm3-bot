@@ -3,20 +3,16 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tower_http::services::ServeDir;
 
 pub fn create_routes(state: AppState) -> Router {
     Router::new()
-        // Static files (CSS, JS, images)
-        .nest_service("/static", ServeDir::new("src/web/static"))
-        
         // Pages
         .route("/", get(super::handlers::chat::index))
         .route("/chat", get(super::handlers::chat::chat_page))
         
         // API endpoints
         .route("/api/chat", post(super::handlers::api::send_message))
-        .route("/api/stream/:session_id", get(super::handlers::api::stream_events))
+        .route("/api/stream/{session_id}", get(super::handlers::api::stream_events))
         .route("/api/toggle-thinking", post(super::handlers::api::toggle_thinking))
         
         // Health check

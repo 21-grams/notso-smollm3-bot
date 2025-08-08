@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmolLM3 Chat</title>
+    <link rel="stylesheet" href="/static/css/chat-minimal.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>SmolLM3 Chat</h1>
+            <div class="system-status" id="system-status">
+                <span class="status-badge">Ready</span>
+            </div>
+        </div>
+        
+        <!-- Pure HTMX SSE implementation -->
+        <div class="chat-messages" id="chat-messages">
+            <!-- Initial greeting -->
+            <div class="message assistant">
+                <div class="message-bubble">
+                    Hello! I'm SmolLM3, ready to help. How can I assist you today?
+                </div>
+            </div>
+            
+            <!-- SSE connection for streaming responses -->
+            <div hx-ext="sse" 
+                 sse-connect="/api/stream/{{ session_id }}"
+                 sse-swap="token,thinking,complete,error"
+                 hx-swap="beforeend">
+                <!-- Tokens and messages will be appended here via SSE -->
+            </div>
+        </div>
+        
+        <!-- Simple status display -->
+        <div class="status-display" id="status-display" style="display: none;">
+            <span class="status-text">Generating...</span>
+        </div>
+        
+        <div class="chat-input">
+            <!-- Thinking mode toggle -->
+            <div class="input-controls">
+                <label class="thinking-toggle">
+                    <input type="checkbox" 
+                           id="thinking-mode"
+                           {% if thinking_mode %}checked{% endif %}
+                           hx-post="/api/toggle-thinking"
+                           hx-trigger="change"
+                           hx-swap="none">
+                    <span class="toggle-switch"></span>
+                    <span>Thinking Mode</span>
+                </label>
+                
+                <!-- Token counter -->
+                <div class="context-indicator">
+                    <span class="context-text" id="context-text">0 / 2048 tokens</span>
+                </div>
+            </div>
+            
+            <form class="input-form"
+                  id="chat-form"
+                  hx-post="/api/chat"
+                  hx-target="#chat-messages"
+                  hx-swap="beforeend"
+                  hx-on::after-request="this.reset(); this.querySelector('textarea').focus()">
+                <input type="hidden" name="session_id" value="{{ session_id }}">
+                <textarea 
+                       name="message" 
+                       id="message-input"
+                       placeholder="Type your message... (Shift+Enter for new line)"
+                       required
+                       autofocus
+                       rows="1"
+                       hx-on::input="this.style.height = 'auto'; this.style.height = Math.min(this.scrollHeight, 120) + 'px'"
+                       hx-on::keydown="if(event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); this.form.requestSubmit(); }"></textarea>
+                <button type="submit" id="send-button">Send</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Minimal JavaScript only for textarea auto-resize and keyboard handling -->
+    <script>
+        // This minimal JS could also be replaced with Alpine.js or hyperscript
+        // But keeping it simple for now
+        console.log('[SmolLM3] Chat initialized with session: {{ session_id }}');
+        
+        // Auto-scroll when new content is added
+        const observer = new MutationObserver(() => {
+            const messages = document.getElementById('chat-messages');
+            messages.scrollTop = messages.scrollHeight;
+        });
+        observer.observe(document.getElementById('chat-messages'), { 
+            childList: true, 
+            subtree: true 
+        });
+    </script>
+</body>
+</html>

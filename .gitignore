@@ -1,1 +1,49 @@
 /target
+
+# Model files - do not commit large binary files
+/models/*.gguf
+/models/*.GGUF
+/models/*.bin
+/models/*.safetensors
+/models/*.pt
+/models/*.pth
+/models/*.onnx
+/models/*.ckpt
+
+# Model config/tokenizer files (can be included if needed, comment out to track)
+# /models/*.json
+# /models/*.txt
+# /models/*.yaml
+# /models/*.yml
+
+# Keep the directory structure but ignore contents
+/models/*
+!/models/.gitkeep
+!/models/download.sh
+!/models/README.md
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Rust
+**/*.rs.bk
+*.pdb
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+
+# Backup files
+*.bak
+*.backup

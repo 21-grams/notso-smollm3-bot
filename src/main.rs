@@ -6,7 +6,6 @@ mod config;
 mod state;
 mod web;
 mod inference;
-// mod smollm3;  // Removed - functionality moved to services/ml/smollm3
 mod services;
 mod types;
 
@@ -16,7 +15,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "notso_smollm3_bot=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "notso_smollm3_bot=info,tower_http=info".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -31,16 +30,42 @@ async fn main() -> Result<()> {
         inference::InferenceEngine::new(&config).await?
     );
     
-    // Initialize ML Service instead of SmolLM3 model directly
-    // The ML service now handles all model operations
-    let ml_service = Arc::new(
-        services::ml::MLService::new_stub().await?  // Start with stub for testing
-    );
+    // Model and tokenizer paths
+    let model_path = "models/HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf";
+    let tokenizer_path = "models/tokenizer.json";
+    
+    // Check if model files exist
+    let use_real_model = std::path::Path::new(model_path).exists() 
+        && std::path::Path::new(tokenizer_path).exists();
+    
+    // Initialize ML Service
+    let ml_service = if use_real_model {
+        tracing::info!("📦 Loading real SmolLM3 model from {}", model_path);
+        tracing::info!("📝 Loading tokenizer from {}", tokenizer_path);
+        
+        // Try to load the real model, fall back to stub if it fails
+        match services::ml::MLService::new(model_path, tokenizer_path).await {
+            Ok(service) => {
+                tracing::info!("✅ Successfully loaded SmolLM3 model");
+                Arc::new(service)
+            }
+            Err(e) => {
+                tracing::warn!("⚠️ Failed to load model: {}. Falling back to stub mode.", e);
+                Arc::new(services::ml::MLService::new_stub().await?)
+            }
+        }
+    } else {
+        tracing::info!("🔌 Model files not found. Starting in stub mode.");
+        tracing::info!("   Expected model: {}", model_path);
+        tracing::info!("   Expected tokenizer: {}", tokenizer_path);
+        Arc::new(services::ml::MLService::new_stub().await?)
+    };
     
     // Create application state
     let app_state = state::AppState::new(ml_service, config);
     
     // Start web server
+    tracing::info!("🌐 Starting web server on http://localhost:3000");
     web::start_server(app_state).await?;
     
     Ok(())

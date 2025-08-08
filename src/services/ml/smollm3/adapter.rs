@@ -42,7 +42,7 @@ impl SmolLM3Adapter {
         position: usize,
     ) -> Result<Tensor> {
         // Check if current layer needs NoPE handling
-        let layer_idx = position % self.config.base.n_layer;
+        let layer_idx = position % self.config.base.num_hidden_layers;
         
         if self.nope_handler.should_skip_rope(layer_idx) {
             // Custom handling for NoPE layers

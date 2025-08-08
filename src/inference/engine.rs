@@ -1,6 +1,7 @@
 use crate::config::Config;
-use candle_core::{Device, Tensor, Result as CandleResult};
-use candle_transformers::models::quantized_llama::{Llama, ModelWeights, LlamaConfig};
+use candle_core::{Device, Tensor, Result as CandleResult, DType};
+use candle_transformers::models::llama::{Llama, Config as LlamaConfig, Cache, LlamaEosToks};
+use candle_core::quantized::gguf_file;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -27,14 +28,18 @@ impl InferenceEngine {
         let llama_config = LlamaConfig {
             vocab_size: 128256,
             hidden_size: 2048,
-            n_layer: 36,
-            n_head: 16,
-            n_kv_head: 4,  // GQA 4:1 ratio
+            num_hidden_layers: 36,
+            num_attention_heads: 16,
+            num_key_value_heads: 4,  // GQA 4:1 ratio
             intermediate_size: 11008,
-            max_seq_len: 65536,
             rope_theta: 2_000_000.0,
             rms_norm_eps: 1e-5,
-            ..Default::default()
+            max_position_embeddings: 65536,
+            bos_token_id: Some(0),
+            eos_token_id: Some(LlamaEosToks::Single(2)),
+            use_flash_attn: false,
+            tie_word_embeddings: false,
+            rope_scaling: None,
         };
         
         Ok(Self {
@@ -58,7 +63,8 @@ impl InferenceEngine {
     
     pub async fn forward(&self, input: &Tensor, position: usize) -> CandleResult<Tensor> {
         if let Some(model) = &self.model {
-            model.lock().await.forward(input, position)
+            let mut cache = Cache::new(false, DType::F32, &self.config, &self.device)?;
+            model.lock().await.forward(input, position, &mut cache)
         } else {
             // Stub mode - return random tensor
             Tensor::randn(

@@ -41,7 +41,8 @@ impl SmolLM3TokenizerExt {
     
     /// Encode with special token handling
     pub fn encode_with_special(&self, text: &str, add_special: bool) -> Result<Vec<u32>> {
-        let encoding = self.tokenizer.encode(text, add_special)?;
+        let encoding = self.tokenizer.encode(text, add_special)
+            .map_err(|e| anyhow::anyhow!("Tokenizer encode error: {}", e))?;
         Ok(encoding.get_ids().to_vec())
     }
     
@@ -52,9 +53,11 @@ impl SmolLM3TokenizerExt {
                 .filter(|&&id| !self.is_special_token(id))
                 .copied()
                 .collect();
-            Ok(self.tokenizer.decode(&filtered, false)?)
+            Ok(self.tokenizer.decode(&filtered, false)
+                .map_err(|e| anyhow::anyhow!("Tokenizer decode error: {}", e))?)
         } else {
-            Ok(self.tokenizer.decode(ids, false)?)
+            Ok(self.tokenizer.decode(ids, false)
+                .map_err(|e| anyhow::anyhow!("Tokenizer decode error: {}", e))?)
         }
     }
     

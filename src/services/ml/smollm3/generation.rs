@@ -59,7 +59,8 @@ impl SmolLM3Generator {
         max_tokens: usize,
     ) -> anyhow::Result<String> {
         // 1. Tokenize input
-        let encoding = self.tokenizer.encode(prompt, false)?;
+        let encoding = self.tokenizer.encode(prompt, false)
+            .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
         let input_ids = encoding.get_ids().to_vec();
         
         // 2. Generation loop with streaming
@@ -84,7 +85,8 @@ impl SmolLM3Generator {
             tokens.push(next_token);
             
             // Decode token to text
-            let token_text = self.tokenizer.decode(&[next_token], false)?;
+            let token_text = self.tokenizer.decode(&[next_token], false)
+                .map_err(|e| anyhow::anyhow!("Tokenizer decode error: {}", e))?;
             
             // Handle thinking mode
             if let Some(event) = self.thinking_detector.process_token(next_token, &token_text) {

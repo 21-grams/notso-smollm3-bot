@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmolLM3 Chat - Pure HTMX</title>
+    <link rel="stylesheet" href="/static/css/chat-minimal.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+    <!-- Optional: Alpine.js for minimal interactivity without custom JS -->
+    <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body>
+    <div class="chat-container" x-data="{ tokenCount: 0 }">
+        <div class="chat-header">
+            <h1>SmolLM3 Chat</h1>
+            <div class="system-status">
+                <span class="status-badge">Ready</span>
+            </div>
+        </div>
+        
+        <!-- Chat messages area with SSE connection -->
+        <div class="chat-messages" 
+             id="chat-messages"
+             hx-ext="sse"
+             sse-connect="/api/stream/{{ session_id }}">
+            
+            <!-- Initial greeting -->
+            <div class="message assistant">
+                <div class="message-bubble">
+                    Hello! I'm SmolLM3, ready to help. How can I assist you today?
+                </div>
+            </div>
+            
+            <!-- This div will receive SSE events and swap HTML directly -->
+            <!-- Each SSE event sends complete HTML fragments -->
+            <div sse-swap="message-start,token,thinking,complete,error"></div>
+        </div>
+        
+        <div class="chat-input">
+            <!-- Input controls -->
+            <div class="input-controls">
+                <label class="thinking-toggle">
+                    <input type="checkbox" 
+                           hx-post="/api/toggle-thinking"
+                           hx-trigger="change"
+                           hx-vals='{"session_id": "{{ session_id }}"}'
+                           {% if thinking_mode %}checked{% endif %}>
+                    <span class="toggle-switch"></span>
+                    <span>Thinking Mode</span>
+                </label>
+                
+                <div class="context-indicator">
+                    <span x-text="`${tokenCount} / 2048 tokens`">0 / 2048 tokens</span>
+                </div>
+            </div>
+            
+            <!-- Chat form - pure HTMX, no custom JavaScript -->
+            <form hx-post="/api/chat"
+                  hx-target="#chat-messages"
+                  hx-swap="beforeend"
+                  hx-on::after-request="this.reset()"
+                  @submit="tokenCount += Math.ceil($refs.messageInput.value.length / 4)">
+                <input type="hidden" name="session_id" value="{{ session_id }}">
+                <textarea 
+                    name="message"
+                    x-ref="messageInput"
+                    placeholder="Type your message... (Shift+Enter for new line)"
+                    required
+                    autofocus
+                    rows="1"
+                    @input="$el.style.height = 'auto'; $el.style.height = Math.min($el.scrollHeight, 120) + 'px'"
+                    @keydown.enter.prevent.stop="if(!$event.shiftKey) $el.form.requestSubmit()"></textarea>
+                <button type="submit">Send</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- Auto-scroll using Alpine.js instead of custom JavaScript -->
+    <div x-data x-init="
+        // Watch for DOM changes and auto-scroll
+        const observer = new MutationObserver(() => {
+            const messages = document.getElementById('chat-messages');
+            messages.scrollTop = messages.scrollHeight;
+        });
+        observer.observe(document.getElementById('chat-messages'), { 
+            childList: true, 
+            subtree: true 
+        });
+    "></div>
+</body>
+</html>
