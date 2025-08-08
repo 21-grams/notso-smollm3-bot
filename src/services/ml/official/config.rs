@@ -67,18 +67,21 @@ pub enum ToolFormat {
 
 impl Default for SmolLM3Config {
     fn default() -> Self {
+        // Create LlamaConfig manually since it doesn't have Default
+        let base = LlamaConfig {
+            vocab_size: 128256,
+            hidden_size: 2048,
+            n_layer: 36,
+            n_head: 16,
+            n_kv_head: 4,           // GQA 4:1 ratio
+            intermediate_size: 11008,
+            max_seq_len: 65536,     // Extended context
+            rope_theta: 2000000.0,  // 2M theta
+            rms_norm_eps: 1e-5,
+        };
+        
         Self {
-            base: LlamaConfig {
-                vocab_size: 128256,
-                hidden_size: 2048,
-                n_layer: 36,
-                n_head: 16,
-                n_kv_head: 4,           // GQA 4:1 ratio
-                intermediate_size: 11008,
-                max_seq_len: 65536,     // Extended context
-                rope_theta: 2000000.0,  // 2M theta
-                rms_norm_eps: 1e-5,
-            },
+            base,
             nope_layers: vec![3, 7, 11, 15, 19, 23, 27, 31, 35],
             thinking_tokens: ThinkingTokens::new(),
             reasoning_mode: ReasoningMode::Think,

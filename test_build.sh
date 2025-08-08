@@ -26,7 +26,7 @@ required_dirs=(
     "src/services/ml/smollm3"
     "src/services/ml/streaming"
     "src/services/template"
-    "templates"
+    "src/web/templates"
 )
 
 for dir in "${required_dirs[@]}"; do

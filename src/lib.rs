@@ -4,7 +4,7 @@ pub mod state;
 pub mod services;
 pub mod types;
 pub mod web;
-pub mod smollm3;
+// pub mod smollm3;  // Removed - functionality in services/ml/smollm3
 pub mod inference;
 
 // Re-exports

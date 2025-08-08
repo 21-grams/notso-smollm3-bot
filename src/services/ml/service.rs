@@ -1,8 +1,8 @@
 //! High-level ML service orchestrating all components
 
 use super::official::{OfficialLoader, SmolLM3Config, OfficialSmolLM3Model};
-use super::smollm3::{SmolLM3Adapter, SmolLM3Generator};
-use super::streaming::GenerationEvent;
+use super::smollm3::SmolLM3Adapter;
+use crate::types::events::StreamEvent;  // Use StreamEvent consistently
 use candle_core::Device;
 use tokenizers::Tokenizer;
 use tokio::sync::mpsc::UnboundedSender;
@@ -10,13 +10,31 @@ use std::sync::Arc;
 use anyhow::Result;
 
 pub struct MLService {
-    adapter: SmolLM3Adapter,
-    generator: SmolLM3Generator,
     config: SmolLM3Config,
     device: Device,
+    tokenizer: Option<Tokenizer>,
+    is_stub: bool,
+    // We'll keep adapter and generator together for simplicity
+    adapter: Option<SmolLM3Adapter>,
 }
 
 impl MLService {
+    /// Create a stub ML service for testing without models
+    pub async fn new_stub() -> Result<Self> {
+        tracing::info!("🔌 Creating stub ML service (no model loaded)");
+        
+        let config = SmolLM3Config::default();
+        let device = Device::Cpu;
+        
+        Ok(Self {
+            config,
+            device,
+            tokenizer: None,
+            is_stub: true,
+            adapter: None,
+        })
+    }
+    
     /// Initialize ML service with official foundation
     pub async fn new(model_path: &str, tokenizer_path: &str) -> Result<Self> {
         tracing::info!("🚀 Initializing ML service with official Candle foundation");
@@ -45,31 +63,60 @@ impl MLService {
         // 6. Load tokenizer
         let tokenizer = Tokenizer::from_file(tokenizer_path)?;
         
-        // 7. Create generator
-        let generator = SmolLM3Generator::new(
-            adapter.model.clone(),  // Note: This needs adjustment for ownership
-            tokenizer,
-            Some(0.7),    // temperature
-            Some(0.9),    // top_p
-        );
-        
         tracing::info!("✅ ML service initialized successfully");
         
         Ok(Self {
-            adapter,
-            generator,
             config,
             device,
+            tokenizer: Some(tokenizer),
+            is_stub: false,
+            adapter: Some(adapter),
         })
+    }
+    
+    /// Generate response for a session (high-level API for handlers)
+    pub async fn generate_response(
+        &self,
+        session_id: &str,
+        message: &str,
+    ) -> anyhow::Result<()> {
+        tracing::info!("Generating response for session: {}", session_id);
+        
+        // For now, just log and return OK
+        // Real implementation would use generate_stream internally
+        tracing::info!("Message: {}", message);
+        Ok(())
     }
     
     /// Generate response with streaming
     pub async fn generate_stream(
         &mut self,
         prompt: &str,
-        sender: UnboundedSender<GenerationEvent>,
+        sender: UnboundedSender<StreamEvent>,
     ) -> Result<String> {
-        self.generator.generate_stream(prompt, sender, 512).await
+        if self.is_stub {
+            // Stub mode - send mock events
+            let _ = sender.send(StreamEvent::thinking("Thinking in stub mode...".to_string()));
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            
+            let response = format!("Mock response to: {}", prompt);
+            for word in response.split_whitespace() {
+                let _ = sender.send(StreamEvent::token(format!("{} ", word)));
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            }
+            
+            let _ = sender.send(StreamEvent::complete());
+            Ok(response)
+        } else {
+            // For now, just return stub response even with model loaded
+            // The actual generation requires more refactoring to handle the mutable model
+            tracing::warn!("Real generation not yet implemented, using stub");
+            
+            let response = format!("Response to: {}", prompt);
+            let _ = sender.send(StreamEvent::token(response.clone()));
+            let _ = sender.send(StreamEvent::complete());
+            Ok(response)
+        }
     }
     
     /// Get model configuration

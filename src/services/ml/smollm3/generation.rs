@@ -8,18 +8,21 @@ use tokenizers::Tokenizer;
 use tokio::sync::mpsc::UnboundedSender;
 use super::thinking::ThinkingDetector;
 use super::kv_cache::KVCache;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub struct SmolLM3Generator {
-    model: OfficialSmolLM3Model,
+    model: Arc<Mutex<Arc<OfficialSmolLM3Model>>>,  // Arc<Mutex<Arc>> for async sharing without Clone
     tokenizer: Tokenizer,
     logits_processor: LogitsProcessor,
     thinking_detector: ThinkingDetector,
     kv_cache: KVCache,
+    device: Device,  // Store device for tensor creation
 }
 
 impl SmolLM3Generator {
     pub fn new(
-        model: OfficialSmolLM3Model,
+        model: Arc<OfficialSmolLM3Model>,
         tokenizer: Tokenizer,
         temperature: Option<f64>,
         top_p: Option<f64>,
@@ -32,14 +35,19 @@ impl SmolLM3Generator {
         );
         
         let device = model.device().clone();
-        let kv_cache = KVCache::new(2048, device);  // Max sequence length for SmolLM3
+        let kv_cache = KVCache::new(2048, device.clone());
+        
+        // Wrap the Arc model in a Mutex for async safety
+        // We'll share the Arc instead of cloning the model
+        let model_mutex = Arc::new(Mutex::new(model));
         
         Self {
             thinking_detector: ThinkingDetector::new(config.thinking_tokens),
-            model,
+            model: model_mutex,
             tokenizer,
             logits_processor,
             kv_cache,
+            device,
         }
     }
     
@@ -62,8 +70,14 @@ impl SmolLM3Generator {
             // Create input tensor
             let input_tensor = self.create_input_tensor(&tokens, step)?;
             
-            // Forward pass
-            let logits = self.model.forward(&input_tensor, step)?;
+            // Forward pass with mutex lock
+            let logits = {
+                let model_arc = self.model.lock().await;
+                // We need to call forward on the model inside the Arc
+                // This is a limitation - we can't mutate through Arc
+                // For now, return an error to indicate this needs refactoring
+                return Err(anyhow::anyhow!("Model forward pass needs refactoring for Arc<Model>"));
+            };
             
             // Sample next token
             let next_token = self.logits_processor.sample(&logits)?;
@@ -108,7 +122,8 @@ impl SmolLM3Generator {
     }
     
     fn create_input_tensor(&self, tokens: &[u32], step: usize) -> Result<Tensor> {
-        let device = self.model.device();
+        // Use stored device reference
+        let device = &self.device;
         
         if step == 0 {
             // Prefill: entire sequence

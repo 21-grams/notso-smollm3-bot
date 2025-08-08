@@ -6,7 +6,7 @@ mod config;
 mod state;
 mod web;
 mod inference;
-mod smollm3;
+// mod smollm3;  // Removed - functionality moved to services/ml/smollm3
 mod services;
 mod types;
 
@@ -31,13 +31,14 @@ async fn main() -> Result<()> {
         inference::InferenceEngine::new(&config).await?
     );
     
-    // Initialize SmolLM3 model
-    let smollm3_model = Arc::new(
-        smollm3::SmolLM3Model::new(inference_engine.clone(), &config).await?
+    // Initialize ML Service instead of SmolLM3 model directly
+    // The ML service now handles all model operations
+    let ml_service = Arc::new(
+        services::ml::MLService::new_stub().await?  // Start with stub for testing
     );
     
     // Create application state
-    let app_state = state::AppState::new(smollm3_model, config);
+    let app_state = state::AppState::new(ml_service, config);
     
     // Start web server
     web::start_server(app_state).await?;

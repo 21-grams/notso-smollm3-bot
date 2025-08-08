@@ -5,8 +5,9 @@ use candle_core::{Tensor, Result, Device};
 use super::nope_layers::NopeHandler;
 use super::thinking::ThinkingDetector;
 
+
 pub struct SmolLM3Adapter {
-    model: OfficialSmolLM3Model,
+    model: OfficialSmolLM3Model,  // Keep as owned for now
     nope_handler: NopeHandler,
     thinking_detector: ThinkingDetector,
     config: SmolLM3Config,
@@ -22,6 +23,16 @@ impl SmolLM3Adapter {
             model,
             config,
         }
+    }
+    
+    /// Get a reference to the config (for creating generator)
+    pub fn get_config(&self) -> &SmolLM3Config {
+        &self.config
+    }
+    
+    /// Get device (for creating generator)
+    pub fn get_device(&self) -> &Device {
+        self.model.device()
     }
     
     /// Forward pass with SmolLM3 extensions
