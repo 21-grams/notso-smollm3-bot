@@ -4,16 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SmolLM3 Chat</title>
-    <link rel="stylesheet" href="/static/css/chat.css">
+    <link rel="stylesheet" href="/static/css/chat-minimal.css">
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
 </head>
 <body>
     <div class="chat-container">
         <div class="chat-header">
             <h1>SmolLM3 Chat</h1>
             <div class="system-status" id="system-status">
-                <span class="status-badge">System Ready</span>
+                <span class="status-badge">Ready</span>
             </div>
         </div>
         
@@ -21,24 +21,21 @@
              id="chat-messages"
              hx-ext="sse"
              sse-connect="/api/stream/{{ session_id }}">
-            <!-- Initial greeting message -->
+            <!-- Initial greeting -->
             <div class="message assistant">
                 <div class="message-bubble">
-                    <div class="message-content">
-                        Hello! I'm SmolLM3, ready to help. How can I assist you today?
-                    </div>
+                    Hello! I'm SmolLM3, ready to help. How can I assist you today?
                 </div>
             </div>
         </div>
         
-        <!-- Status display -->
+        <!-- Simple status display -->
         <div class="status-display" id="status-display" style="display: none;">
-            <span class="status-icon"></span>
             <span class="status-text">Generating...</span>
         </div>
         
         <div class="chat-input">
-            <!-- Thinking toggle above input -->
+            <!-- Thinking mode toggle -->
             <div class="input-controls">
                 <label class="thinking-toggle">
                     <input type="checkbox" 
@@ -50,59 +47,170 @@
                     <span>Thinking Mode</span>
                 </label>
                 
-                <!-- Context indicator -->
+                <!-- Token counter -->
                 <div class="context-indicator">
-                    <div class="context-bar">
-                        <div class="context-fill" id="context-fill" style="width: 0%"></div>
-                    </div>
                     <span class="context-text" id="context-text">0 / 2048 tokens</span>
                 </div>
             </div>
             
             <form class="input-form"
+                  id="chat-form"
                   hx-post="/api/chat"
                   hx-target="#chat-messages"
-                  hx-swap="beforeend"
-                  hx-on::after-request="this.reset(); this.message.focus()">
+                  hx-swap="beforeend">
                 <input type="hidden" name="session_id" value="{{ session_id }}">
-                <input type="text" 
+                <textarea 
                        name="message" 
-                       placeholder="Type your message..."
+                       id="message-input"
+                       placeholder="Type your message... (Alt+Enter for new line)"
                        required
-                       autofocus>
-                <button type="submit">Send</button>
+                       autofocus
+                       rows="1"></textarea>
+                <button type="submit" id="send-button">Send</button>
             </form>
         </div>
     </div>
     
     <script>
-        // Markdown rendering
-        function renderMarkdown(text) {
-            return marked.parse(text);
+        console.log('[SmolLM3] Chat initialized with session: {{ session_id }}');
+        
+        // Core functionality
+        const messageInput = document.getElementById('message-input');
+        const chatForm = document.getElementById('chat-form');
+        const chatMessages = document.getElementById('chat-messages');
+        const statusDisplay = document.getElementById('status-display');
+        const contextText = document.getElementById('context-text');
+        
+        // Auto-resize textarea and handle Alt+Enter
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        });
+        
+        messageInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                if (!e.altKey) {
+                    // Enter without Alt - submit form
+                    e.preventDefault();
+                    chatForm.requestSubmit();
+                }
+                // Alt+Enter - allow new line (default behavior)
+            }
+        });
+        
+        // Form submission
+        chatForm.addEventListener('htmx:afterRequest', function(evt) {
+            console.log('[SmolLM3] Message sent');
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+            messageInput.focus();
+        });
+        
+        // SSE event handling
+        document.body.addEventListener('htmx:sseMessage', function(evt) {
+            const eventType = evt.detail.sseEventName;
+            const data = evt.detail.data;
+            
+            console.log(`[SSE] Event: ${eventType}`, data);
+            
+            try {
+                const parsed = JSON.parse(data);
+                
+                switch(eventType) {
+                    case 'token':
+                        appendToken(parsed.content);
+                        break;
+                    case 'thinking':
+                        handleThinking(parsed.content);
+                        break;
+                    case 'complete':
+                        onComplete();
+                        break;
+                    case 'error':
+                        handleError(parsed.message);
+                        break;
+                    default:
+                        console.log(`[SSE] Unhandled event: ${eventType}`);
+                }
+            } catch (e) {
+                console.error('[SSE] Parse error:', e);
+            }
+        });
+        
+        // Connection error handling
+        document.body.addEventListener('htmx:sseError', function(evt) {
+            console.error('[SSE] Connection error:', evt.detail);
+            handleConnectionError();
+        });
+        
+        let currentAssistantMessage = null;
+        let tokenCount = 0;
+        
+        function appendToken(token) {
+            if (!currentAssistantMessage) {
+                // Create new assistant message
+                currentAssistantMessage = document.createElement('div');
+                currentAssistantMessage.className = 'message assistant';
+                currentAssistantMessage.innerHTML = '<div class="message-bubble"></div>';
+                chatMessages.appendChild(currentAssistantMessage);
+            }
+            
+            const bubble = currentAssistantMessage.querySelector('.message-bubble');
+            bubble.textContent += token;
+            
+            // Update token count (rough estimate)
+            tokenCount += Math.ceil(token.length / 4);
+            contextText.textContent = `${tokenCount} / 2048 tokens`;
+            
+            // Auto-scroll
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
         
-        // Auto-scroll to bottom on new messages
-        const chatMessages = document.getElementById('chat-messages');
-        const observer = new MutationObserver(() => {
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        });
-        observer.observe(chatMessages, { childList: true, subtree: true });
+        function handleThinking(content) {
+            console.log('[Thinking]', content);
+            statusDisplay.style.display = 'block';
+            statusDisplay.querySelector('.status-text').textContent = 'Thinking...';
+        }
         
-        // Handle SSE events for streaming
-        document.body.addEventListener('htmx:sseMessage', function(evt) {
-            const data = JSON.parse(evt.detail.data);
-            
-            switch(data.type) {
-                case 'status':
-                    updateStatus(data.status, data.detail);
-                    break;
-                    
-                case 'token':
-                    appendToken(data.content);
-                    break;
-                    
-                case 'thinking':
-                    showThinking(data.content);
-                    break;
-                    
-                case 'tool_use
+        function onComplete() {
+            console.log('[SmolLM3] Response complete');
+            currentAssistantMessage = null;
+            statusDisplay.style.display = 'none';
+        }
+        
+        function handleError(message) {
+            console.error('[SmolLM3] Error:', message);
+            const errorDiv = document.createElement('div');
+            errorDiv.className = 'message error';
+            errorDiv.innerHTML = `<div class="message-bubble">Error: ${message}</div>`;
+            chatMessages.appendChild(errorDiv);
+            statusDisplay.style.display = 'none';
+        }
+        
+        function handleConnectionError() {
+            // TODO: Implement FTS cache fallback
+            // For now, just show offline message
+            const offlineMsg = document.createElement('div');
+            offlineMsg.className = 'message error';
+            offlineMsg.innerHTML = `
+                <div class="message-bubble">
+                    Server is offline, do you want to fallback to FTS cache search?
+                    <button onclick="console.log('TODO: Implement FTS fallback')" disabled>
+                        Use Cache (Not Implemented)
+                    </button>
+                </div>
+            `;
+            chatMessages.appendChild(offlineMsg);
+        }
+        
+        // Debug: Log all HTMX events
+        document.body.addEventListener('htmx:beforeRequest', () => {
+            console.log('[HTMX] Sending request...');
+        });
+        
+        document.body.addEventListener('htmx:afterRequest', (evt) => {
+            console.log('[HTMX] Request complete:', evt.detail);
+        });
+    </script>
+</body>
+</html>
