@@ -24,6 +24,13 @@ pub async fn send_message(
     State(state): State<AppState>,
     Form(msg): Form<ChatMessage>,
 ) -> Html<String> {
+    // Check if message is a slash command
+    if msg.message.starts_with("/quote") {
+        // Handle quote command
+        return handle_quote_command(state, msg).await;
+    }
+    
+    // Regular message handling
     // Render user message immediately
     let user_html = format!(
         r#"<div class="message user">
@@ -122,6 +129,41 @@ pub async fn send_message(
     
     // Return user message HTML for immediate display
     Html(user_html)
+}
+
+/// Handle the /quote command
+async fn handle_quote_command(
+    State(state): State<AppState>,
+    Form(msg): Form<ChatMessage>,
+) -> Html<String> {
+    // First, show the user's command
+    let user_html = format!(
+        r#"<div class="message user">
+            <div class="message-bubble">{}</div>
+        </div>"#,
+        html_escape::encode_text(&msg.message)
+    );
+    
+    // Create a unique message ID for SSE targeting
+    let message_id = uuid::Uuid::new_v4().to_string();
+    
+    // Create the assistant response container with SSE connection
+    let response_html = format!(
+        r#"{}
+        <div class="message assistant" id="msg-{}">
+            <div class="message-bubble" 
+                 hx-ext="sse"
+                 sse-connect="/api/stream/quote/{}/{}">
+                <!-- Content will be streamed here -->
+            </div>
+        </div>"#,
+        user_html,
+        message_id,
+        msg.session_id,
+        message_id
+    );
+    
+    Html(response_html)
 }
 
 /// Stream events for a session - now sending HTML fragments

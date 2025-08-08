@@ -65,7 +65,6 @@ async fn main() -> Result<()> {
     let app_state = state::AppState::new(ml_service, config);
     
     // Start web server
-    tracing::info!("🌐 Starting web server on http://localhost:3000");
     web::start_server(app_state).await?;
     
     Ok(())

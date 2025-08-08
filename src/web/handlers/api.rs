@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
 use tokio_stream::StreamExt;
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub struct ChatMessage {
@@ -30,6 +31,31 @@ pub async fn send_message(
     State(state): State<AppState>,
     Form(msg): Form<ChatMessage>,
 ) -> Html<String> {
+    // Check if message is a slash command
+    if msg.message.starts_with("/quote") {
+        // Return HTML that includes both user message and assistant response with SSE
+        let message_id = uuid::Uuid::new_v4().to_string();
+        
+        let html = format!(
+            r#"<div class="message user">
+                <div class="message-bubble">{}</div>
+            </div>
+            <div class="message assistant" id="msg-{}">
+                <div class="message-bubble" 
+                     hx-ext="sse"
+                     sse-connect="/api/stream/quote/{}/{}" 
+                     sse-swap="message">
+                    <!-- Content will be streamed here -->
+                </div>
+            </div>"#,
+            html_escape::encode_text(&msg.message),
+            message_id,
+            msg.session_id,
+            message_id
+        );
+        
+        return Html(html);
+    }
     // Render user message immediately
     let template_service = ChatTemplateService::new().unwrap();
     let user_html = template_service

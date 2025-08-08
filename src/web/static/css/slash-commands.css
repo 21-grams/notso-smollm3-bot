@@ -1,0 +1,191 @@
+/* Slash command menu styles */
+
+.slash-command-menu {
+    position: absolute;
+    bottom: calc(100% + 8px);  /* Position above the input */
+    left: 0;
+    right: 0;
+    background: var(--surface-color, #ffffff);
+    border-radius: 12px;
+    box-shadow: 
+        0 -4px 12px rgba(0, 0, 0, 0.1),
+        0 -2px 6px rgba(0, 0, 0, 0.05);
+    border: 1px solid var(--border-color, #e5e7eb);
+    max-height: 300px;
+    overflow-y: auto;
+    display: none;
+    z-index: 1000;
+}
+
+/* Input wrapper needs relative positioning */
+.input-wrapper {
+    position: relative;
+}
+
+.chat-input form > div {
+    position: relative;
+}
+
+.slash-command-menu.active {
+    display: block;
+    animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.slash-command-list {
+    padding: 8px;
+    margin: 0;
+    list-style: none;
+}
+
+.slash-command-item {
+    padding: 10px 12px;
+    margin: 4px 0;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: all 0.15s ease;
+}
+
+.slash-command-item:hover,
+.slash-command-item.selected {
+    background: var(--hover-color, #f3f4f6);
+    transform: translateX(2px);
+}
+
+.slash-command-item.selected {
+    background: var(--primary-light, #dbeafe);
+}
+
+.slash-command-icon {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--icon-bg, #f9fafb);
+    border-radius: 8px;
+    font-size: 18px;
+}
+
+.slash-command-content {
+    flex: 1;
+}
+
+.slash-command-name {
+    font-weight: 600;
+    color: var(--text-primary, #111827);
+    margin-bottom: 2px;
+}
+
+.slash-command-description {
+    font-size: 13px;
+    color: var(--text-secondary, #6b7280);
+}
+
+.slash-command-shortcut {
+    padding: 4px 8px;
+    background: var(--shortcut-bg, #f3f4f6);
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: monospace;
+    color: var(--text-secondary, #6b7280);
+}
+
+/* Category headers */
+.slash-command-category {
+    padding: 8px 12px 4px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-tertiary, #9ca3af);
+    letter-spacing: 0.05em;
+}
+
+/* Search/filter input */
+.slash-command-search {
+    padding: 8px 12px;
+    margin: 8px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 8px;
+    font-size: 14px;
+    width: calc(100% - 16px);
+    background: var(--input-bg, #f9fafb);
+}
+
+.slash-command-search:focus {
+    outline: none;
+    border-color: var(--primary-color, #3b82f6);
+    background: white;
+}
+
+/* Empty state */
+.slash-command-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--text-secondary, #6b7280);
+    font-size: 14px;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .slash-command-menu {
+        position: fixed;
+        bottom: auto;
+        top: auto;
+        left: 10px;
+        right: 10px;
+        margin-bottom: 10px;
+        /* Position it just above the input on mobile */
+        bottom: 100px;
+        max-height: 50vh;
+    }
+    
+    .slash-command-item {
+        padding: 12px;
+    }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    .slash-command-menu {
+        background: #1f2937;
+        border-color: #374151;
+        box-shadow: 0 -4px 6px -1px rgba(0, 0, 0, 0.3);
+    }
+    
+    .slash-command-item:hover,
+    .slash-command-item.selected {
+        background: #374151;
+    }
+    
+    .slash-command-item.selected {
+        background: #1e3a8a;
+    }
+    
+    .slash-command-icon {
+        background: #374151;
+    }
+    
+    .slash-command-name {
+        color: #f3f4f6;
+    }
+    
+    .slash-command-search {
+        background: #374151;
+        border-color: #4b5563;
+        color: #f3f4f6;
+    }
+}

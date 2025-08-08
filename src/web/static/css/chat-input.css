@@ -1,0 +1,270 @@
+/* Chat input form improvements */
+
+.chat-input {
+    padding: 20px;
+    border-top: 1px solid var(--border-color, #e5e7eb);
+    background: var(--surface-color, #ffffff);
+}
+
+.input-form {
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+}
+
+.input-wrapper {
+    flex: 1;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+}
+
+#message-input,
+textarea[name="message"] {
+    width: 100%;
+    padding: 12px 16px;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 12px;
+    font-size: 15px;
+    font-family: inherit;
+    resize: none;
+    outline: none;
+    transition: all 0.2s ease;
+    background: var(--input-bg, #ffffff);
+    box-sizing: border-box;
+    overflow-y: auto;
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* IE and Edge */
+}
+
+/* Hide scrollbar for Chrome, Safari and Opera */
+#message-input::-webkit-scrollbar,
+textarea[name="message"]::-webkit-scrollbar {
+    width: 6px;
+    display: none;
+}
+
+/* Show scrollbar on hover only when there's overflow */
+#message-input:hover,
+textarea[name="message"]:hover {
+    scrollbar-width: thin; /* Firefox */
+}
+
+#message-input:hover::-webkit-scrollbar,
+textarea[name="message"]:hover::-webkit-scrollbar {
+    display: block;
+}
+
+/* Scrollbar styling when visible */
+#message-input::-webkit-scrollbar-track,
+textarea[name="message"]::-webkit-scrollbar-track {
+    background: transparent;
+    border-radius: 3px;
+}
+
+#message-input::-webkit-scrollbar-thumb,
+textarea[name="message"]::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+    transition: background 0.2s ease;
+}
+
+#message-input::-webkit-scrollbar-thumb:hover,
+textarea[name="message"]::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.3);
+}
+
+/* Enhanced scrollbar behavior for overflow state */
+#message-input.has-overflow,
+textarea[name="message"].has-overflow {
+    padding-right: 10px; /* Make room for scrollbar */
+}
+
+/* Smoother scrollbar appearance animation */
+#message-input,
+textarea[name="message"] {
+    transition: padding-right 0.2s ease;
+}
+
+/* Optional: Show subtle indicator when content is scrollable */
+#message-input.has-overflow:not(:hover)::after,
+textarea[name="message"].has-overflow:not(:hover)::after {
+    content: '';
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 2px;
+    height: 20px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 1px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+/* Show the indicator on focus if there's overflow */
+#message-input.has-overflow:focus::after,
+textarea[name="message"].has-overflow:focus::after {
+    opacity: 1;
+}
+
+/* Dark mode scrollbar */
+@media (prefers-color-scheme: dark) {
+    #message-input::-webkit-scrollbar-thumb,
+    textarea[name="message"]::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.2);
+    }
+    
+    #message-input::-webkit-scrollbar-thumb:hover,
+    textarea[name="message"]::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.3);
+    }
+    
+    #message-input.has-overflow:not(:hover)::after,
+    textarea[name="message"].has-overflow:not(:hover)::after {
+        background: rgba(255, 255, 255, 0.1);
+    }
+}
+
+#message-input:focus,
+textarea[name="message"]:focus {
+    border-color: var(--primary-color, #6366f1);
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+}
+
+#send-button,
+button[type="submit"] {
+    padding: 12px 24px;
+    background: var(--primary-color, #6366f1);
+    color: white;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+#send-button:hover,
+button[type="submit"]:hover {
+    background: var(--primary-hover, #5558e3);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+}
+
+#send-button:active,
+button[type="submit"]:active {
+    transform: translateY(0);
+}
+
+/* Input controls (thinking mode, token counter) */
+.input-controls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    padding: 0 4px;
+}
+
+.thinking-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.thinking-toggle input[type="checkbox"] {
+    display: none;
+}
+
+.toggle-switch {
+    width: 44px;
+    height: 24px;
+    background: var(--toggle-bg, #e5e7eb);
+    border-radius: 12px;
+    position: relative;
+    transition: background 0.3s ease;
+}
+
+.toggle-switch::after {
+    content: '';
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    background: white;
+    border-radius: 10px;
+    top: 2px;
+    left: 2px;
+    transition: transform 0.3s ease;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.thinking-toggle input:checked + .toggle-switch {
+    background: var(--primary-color, #6366f1);
+}
+
+.thinking-toggle input:checked + .toggle-switch::after {
+    transform: translateX(20px);
+}
+
+.context-indicator {
+    font-size: 13px;
+    color: var(--text-secondary, #6b7280);
+}
+
+/* Ensure the form takes full width */
+.chat-input form {
+    width: 100%;
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+    .chat-input {
+        background: #1f2937;
+        border-top-color: #374151;
+    }
+    
+    #message-input,
+    textarea[name="message"] {
+        background: #111827;
+        border-color: #374151;
+        color: #f3f4f6;
+    }
+    
+    #message-input:focus,
+    textarea[name="message"]:focus {
+        border-color: #6366f1;
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+    }
+    
+    .toggle-switch {
+        background: #374151;
+    }
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .chat-input {
+        padding: 16px;
+    }
+    
+    .input-form {
+        gap: 8px;
+    }
+    
+    #message-input,
+    textarea[name="message"] {
+        font-size: 16px; /* Prevent zoom on iOS */
+        padding: 10px 14px;
+    }
+    
+    #send-button,
+    button[type="submit"] {
+        padding: 10px 20px;
+        font-size: 14px;
+    }
+}

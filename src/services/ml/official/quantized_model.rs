@@ -22,7 +22,7 @@ impl QuantizedSmolLM3 {
         device: Device,
     ) -> Result<Self> {
         // Initialize KV cache
-        let kv_cache = vec![None; config.n_layers];
+        let kv_cache = vec![None; config.base.num_hidden_layers];
         
         Ok(Self {
             tensors,
@@ -41,20 +41,20 @@ impl QuantizedSmolLM3 {
     }
     
     /// Simple forward pass for generation
-    pub fn forward(&mut self, input_ids: &Tensor, position: usize) -> Result<Tensor> {
-        let seq_len = input_ids.dim(1)?;
-        let hidden_size = self.config.hidden_size;
+    pub fn forward(&mut self, input_ids: &Tensor, _position: usize) -> Result<Tensor> {
+        let _seq_len = input_ids.dim(1)?;
+        let _hidden_size = self.config.base.hidden_size;
         
         // 1. Token embedding
         let embed_tokens = self.get_tensor("model.embed_tokens.weight")?;
         let mut hidden_states = embed_tokens.index_select(input_ids, 0)?;
         
         // 2. Pass through layers
-        for layer_idx in 0..self.config.n_layers {
+        for layer_idx in 0..self.config.base.num_hidden_layers {
             hidden_states = self.forward_layer(
                 &hidden_states,
                 layer_idx,
-                position,
+                _position,
             )?;
         }
         
@@ -74,7 +74,7 @@ impl QuantizedSmolLM3 {
         &mut self,
         hidden_states: &Tensor,
         layer_idx: usize,
-        position: usize,
+        _position: usize,
     ) -> Result<Tensor> {
         let layer_prefix = format!("model.layers.{}", layer_idx);
         
@@ -119,7 +119,7 @@ impl QuantizedSmolLM3 {
     }
     
     /// Simple attention mechanism (placeholder)
-    fn simple_attention(&mut self, q: &Tensor, k: &Tensor, v: &Tensor, layer_idx: usize) -> Result<Tensor> {
+    fn simple_attention(&mut self, _q: &Tensor, _k: &Tensor, v: &Tensor, _layer_idx: usize) -> Result<Tensor> {
         // For now, just return v as a placeholder
         // Real implementation would do proper attention with KV cache
         Ok(v.clone())

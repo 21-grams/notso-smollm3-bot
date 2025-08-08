@@ -24,32 +24,45 @@ Production-ready SmolLM3 chatbot using Candle.rs with a clean 3-tier architectur
 └──────────────────────────────────────────────────────────┘
 ```
 
-## 🚀 Latest Update (Phase: Web Server Route Fix)
+## 🚀 Latest Update (v0.3.0 - Slash Commands & Streaming)
 
-### **Fixed Route Conflict Issue** ✅
-Resolved the Axum router conflict where `/static` route was being registered twice:
+### **New Features** ✨
 
-**Problem**: 
-```
-thread 'main' panicked at src/web/server.rs:22:10:
-Invalid route "/static/{*__private__axum_nest_tail_param}":
-Insertion failed due to conflict with previously registered route
-```
+#### 1. **Slash Commands System**
+- Type `/` in chat to open an interactive command palette
+- **Categories**: Chat, Model, Utility, Quick Actions
+- **Keyboard Navigation**: Arrow keys, Enter to select, Tab to autocomplete
+- **Available Commands**:
+  - `/clear` - Clear chat history
+  - `/reset` - Reset conversation context  
+  - `/export` - Export chat to file
+  - `/thinking` - Toggle thinking mode
+  - `/temp` - Adjust temperature
+  - `/model` - View model info
+  - `/quote` - Stream scripture passages (test command)
+  - `/help` - Show all commands
+  - `/status` - System status
+  - `/theme` - Toggle dark/light theme
 
-**Root Cause**:
-- Static file route was defined in both `routes.rs` and `server.rs`
-- Axum doesn't allow duplicate route patterns
+#### 2. **Response Buffer Testing with `/quote`**
+- Special test command that streams John 1:1-14 (Recovery Version)
+- Uses pure HTMX SSE for smooth text streaming
+- Server-side markdown to HTML conversion
+- Progressive verse-by-verse display
+- Tests streaming buffer behavior without model loading
 
-**Solution**:
-1. Removed duplicate `/static` registration from `src/web/routes.rs`
-2. Kept single registration in `src/web/server.rs` for clarity
-3. Added documentation comments for middleware stack order
-4. Created `/doc/routing-architecture.md` for routing best practices
+#### 3. **UI/UX Improvements**
+- Smart scrollbar: Hidden by default, appears on hover when needed
+- Full-width input field with proper flex layout
+- Smooth animations for command menu
+- Dark mode support throughout
+- Mobile responsive design
 
-### **Architecture Improvements**
-- **Clear Separation**: Static files served at app level, application routes in dedicated module
-- **Single Responsibility**: Each module handles specific route types
-- **Documentation**: Added routing architecture guide for future reference
+### **Technical Implementation**
+- **Pure HTMX SSE**: No JavaScript for streaming, uses `hx-ext="sse"`
+- **Server-Side Rendering**: MiniJinja 2 templates
+- **Elegant Simplicity**: Minimal client-side code
+- **Axum 0.8.4**: Proper route syntax with `{param}` captures
 
 ## 📁 Project Structure & File Descriptions
 

@@ -119,7 +119,7 @@ impl MLService {
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
             }
             
-            let _ = sender.send(StreamEvent::done());
+            let _ = sender.send(StreamEvent::complete());
             return Ok(response.to_string());
         }
         

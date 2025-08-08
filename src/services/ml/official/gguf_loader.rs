@@ -5,7 +5,7 @@ use candle_core::{Device, Result};
 use candle_transformers::models::quantized_llama::ModelWeights;
 use std::collections::HashMap;
 use std::path::Path;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 
 /// Inspect GGUF file metadata and return a detailed report
 pub fn inspect_gguf<P: AsRef<Path>>(path: P) -> Result<GgufInspectionReport> {
@@ -71,7 +71,7 @@ impl GgufInspectionReport {
     /// Print a formatted report
     pub fn print_report(&self) {
         println!("🔍 GGUF Inspection Report");
-        println!("=".repeat(50));
+        println!("{}", "=".repeat(50));
         println!("✅ Valid GGUF: {}", self.valid);
         println!("📊 Tensors: {}", self.tensor_count);
         println!("📋 Metadata entries: {}", self.metadata_count);
@@ -113,7 +113,7 @@ impl SmolLM3GgufLoader {
     /// Load GGUF file with SmolLM3-specific handling
     pub fn load_gguf<P: AsRef<Path>>(
         path: P,
-        device: &Device,
+        _device: &Device,
     ) -> Result<(gguf_file::Content, HashMap<String, QTensor>)> {
         tracing::info!("📦 Loading SmolLM3 GGUF file");
         
@@ -165,7 +165,7 @@ impl SmolLM3GgufLoader {
                       n_heads, n_kv_heads, n_layers, hidden_size, vocab_size);
         
         // Load tensors
-        let mut tensors = HashMap::new();
+        let tensors = HashMap::new();
         let tensor_start_offset = content.tensor_data_offset;
         file.seek(SeekFrom::Start(tensor_start_offset))?;
         
@@ -195,29 +195,29 @@ impl SmolLM3GgufLoader {
     }
     
     /// Create a config from GGUF metadata
-    pub fn config_from_gguf(content: &gguf_file::Content) -> super::super::config::SmolLM3Config {
-        use super::super::config::SmolLM3Config;
+    pub fn config_from_gguf(content: &gguf_file::Content) -> super::config::SmolLM3Config {
+        use super::config::SmolLM3Config;
         
         let mut config = SmolLM3Config::default();
         
         // Update config from metadata if available
         if let Some(val) = Self::get_metadata_u32(content, &["llama.attention.head_count", "attention.head_count"]) {
-            config.n_heads = val as usize;
+            config.base.num_attention_heads = val as usize;
         }
         if let Some(val) = Self::get_metadata_u32(content, &["llama.attention.head_count_kv", "attention.head_count_kv"]) {
-            config.n_kv_heads = val as usize;
+            config.base.num_key_value_heads = val as usize;
         }
         if let Some(val) = Self::get_metadata_u32(content, &["llama.block_count", "block_count"]) {
-            config.n_layers = val as usize;
+            config.base.num_hidden_layers = val as usize;
         }
         if let Some(val) = Self::get_metadata_u32(content, &["llama.embedding_length", "hidden_size"]) {
-            config.hidden_size = val as usize;
+            config.base.hidden_size = val as usize;
         }
         if let Some(val) = Self::get_metadata_u32(content, &["llama.vocab_size", "vocab_size"]) {
-            config.vocab_size = val as usize;
+            config.base.vocab_size = val as usize;
         }
         if let Some(val) = Self::get_metadata_u32(content, &["llama.context_length", "context_length"]) {
-            config.max_position_embeddings = val as usize;
+            config.base.max_position_embeddings = val as usize;
         }
         
         config
