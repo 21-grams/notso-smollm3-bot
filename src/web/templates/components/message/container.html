@@ -1,0 +1,49 @@
+{# Message container template - creates the initial structure #}
+<div class="message {{ role }}" id="msg-{{ message_id }}" data-message-id="{{ message_id }}">
+    <div class="message-header">
+        <span class="role-label">{{ role|title }}</span>
+        <span class="timestamp" data-time="{{ timestamp }}">just now</span>
+    </div>
+    
+    <div class="message-bubble">
+        {# Content area for streaming #}
+        <div class="message-content" 
+             id="content-{{ message_id }}"
+             sse-swap="msg-{{ message_id }}">
+            {% if role == "user" %}
+                {{ content|escape }}
+            {% else %}
+                {# Assistant message starts with loading indicator #}
+                <div class="loading-indicator">
+                    <span class="dots">
+                        <span>.</span><span>.</span><span>.</span>
+                    </span>
+                </div>
+            {% endif %}
+        </div>
+        
+        {# Hidden thinking area (only shown when thinking) #}
+        <details class="thinking-area" id="thinking-{{ message_id }}" style="display: none;">
+            <summary>Thinking process</summary>
+            <div class="thinking-content"></div>
+        </details>
+        
+        {# Message actions (hidden during streaming) #}
+        <div class="message-actions" id="actions-{{ message_id }}" style="display: none;">
+            <button class="action-btn copy" onclick="copyMessage('{{ message_id }}')">
+                <svg><!-- copy icon --></svg>
+            </button>
+            <button class="action-btn regenerate" 
+                    hx-post="/api/regenerate" 
+                    hx-vals='{"message_id": "{{ message_id }}"}'>
+                <svg><!-- regenerate icon --></svg>
+            </button>
+        </div>
+    </div>
+    
+    {# Metadata footer (hidden initially) #}
+    <div class="message-footer" id="footer-{{ message_id }}" style="display: none;">
+        <span class="token-count">0 tokens</span>
+        <span class="generation-time">0ms</span>
+    </div>
+</div>

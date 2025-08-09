@@ -25,21 +25,21 @@ The Q4_K_M format provides the best balance of model quality, inference speed, a
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│                      Web Layer                              │
-│                    (Axum 0.8 + HTMX)                        │
+│                  Web Layer (Axum 0.8 + HTMX 2.0.6)         │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  • HTTP Routes      • SSE Streaming                 │   │
+│  │  • HTTP Routes      • Persistent SSE per Session    │   │
 │  │  • Chat UI          • Slash Commands                │   │
-│  │  • Session Mgmt     • Markdown Rendering (Client)   │   │
+│  │  • MiniJinja 2      • Progressive Markdown          │   │
 │  └─────────────────────────────────────────────────────┘   │
 └────────────────────────────┬───────────────────────────────┘
                              │
 ┌────────────────────────────▼───────────────────────────────┐
 │                     Service Layer                           │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │  • ML Service       • Streaming Buffer              │   │
-│  │  • Session Manager  • Template Engine               │   │
-│  │  • Event Pipeline   • Command Handlers              │   │
+│  │  • Session Manager (Single Receiver Pattern)        │   │
+│  │  • Unified StreamingBuffer (500ms/10 tokens)        │   │
+│  │  • Template Engine with Custom Filters              │   │
+│  │  • Event Pipeline (mpsc channels)                   │   │
 │  └─────────────────────────────────────────────────────┘   │
 └────────────────────────────┬───────────────────────────────┘
                              │
@@ -120,17 +120,32 @@ User Input → Web Handler → Command Detection → Service Layer
 ```
 Model/Command Output → Streaming Buffer → SSE Events → Client
          ↓                    ↓              ↓           ↓
-   Token Generation    Accumulate (10)   "message"   Markdown
-                          or 100ms        event      Rendering
+   Token Generation    Accumulate (10)   "message"   Progressive
+                          or 500ms        event      Markdown
 ```
 
-### 3. **Buffer Strategy**
-- Accumulates tokens until threshold (10 tokens or 100ms)
+### 3. **Session & Streaming Architecture**
+
+#### Session Management
+- **Single Receiver Pattern**: Each session creates one receiver, taken once by SSE
+- **Persistent SSE**: One connection per session, auto-reconnects with `Last-Event-ID`
+- **Clean Separation**: Senders remain with sessions, receivers consumed by SSE endpoints
+
+#### Buffer Strategy
+- Accumulates tokens until threshold (10 tokens or 500ms)
 - Reduces DOM updates for smooth user experience
 - Single buffer implementation for all output types
-- Automatic completion signaling
+- Natural boundary detection (sentences, paragraphs)
+- Automatic completion signaling with metadata
 
 ## 🚀 Key Features
+
+### Latest Technology Stack (August 2025)
+- **Rust**: Stable 1.80+ with async/await, Arc<RwLock> patterns
+- **Axum 0.8**: Latest with `/{param}` syntax, improved SSE, graceful shutdown
+- **HTMX 2.0.6**: Core + SSE extension 2.2.2, morphing support
+- **MiniJinja 2.11+**: Template inheritance, custom filters, safe rendering
+- **UUID v7**: Sortable, timestamp-based message IDs
 
 ### SmolLM3-Specific Optimizations
 - **Grouped Query Attention (GQA)**: 4:1 KV head ratio for 75% memory savings
@@ -143,7 +158,9 @@ Model/Command Output → Streaming Buffer → SSE Events → Client
 - **Q4_K_M Quantization**: 4-bit weights with minimal quality loss
 - **Direct Quantized Ops**: No dequantization overhead
 - **Unified Streaming**: Single pipeline for all content types
-- **HTMX + SSE**: Minimal JavaScript, server-driven UI
+- **Persistent SSE**: One connection per session with auto-reconnect
+- **Progressive Markdown**: Real-time rendering during streaming
+- **Template Components**: Modular MiniJinja templates for messages
 
 ## 🏭 Modular Design Philosophy
 
@@ -219,17 +236,21 @@ Access the chat interface at `http://localhost:3000`
 - **First Token Latency**: < 500ms
 - **Generation Speed**: 1-2 tokens/second
 - **Memory Usage**: ~2GB with Q4_K_M (1.5GB model + overhead)
-- **Context Length**: 2048 tokens (expandable)
-- **Streaming Buffer**: 10 tokens or 100ms flush
+- **Context Length**: 2048 tokens (expandable to 32K)
+- **Streaming Buffer**: 10 tokens or 500ms flush
+- **SSE Keep-Alive**: 30-second intervals
 - **Quantization**: Maintained throughout inference (no dequantization)
+- **KV Cache**: 75% memory savings with GQA optimization
 
 ## 🔧 Configuration
 
 Key settings in `config.rs`:
 - Model paths and device selection
-- Temperature and sampling parameters
-- Buffer thresholds for streaming
+- Temperature and sampling parameters  
+- Buffer thresholds (500ms, 10 tokens)
 - Thinking mode defaults
+- Session timeout and cleanup
+- SSE keep-alive intervals
 
 ## 🧪 Testing
 
@@ -238,6 +259,14 @@ The `/quote` command serves as an integration test for the streaming pipeline:
 - Validates SSE event flow
 - Demonstrates markdown rendering
 - Confirms proper stream completion
+
+## 📚 Documentation
+
+Detailed technical documentation is available in the `/doc` directory:
+- `architecture.md` - System design and component details
+- `latest-tech-stack-2025.md` - Current versions and features reference
+- `gguf_integration_status.md` - GGUF metadata mapping
+- `streaming-architecture.md` - SSE and buffer design
 
 ## 📝 License
 

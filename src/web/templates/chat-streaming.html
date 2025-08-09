@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmolLM3 Chat</title>
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/css/chat-minimal.css">
+    <link rel="stylesheet" href="/static/css/chat-streaming.css">
+    
+    <!-- HTMX 2.0.6 with SSE Extension -->
+    <script src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.6/dist/htmx.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2/dist/sse.min.js"></script>
+    
+    <!-- Markdown rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+    <!-- Optional: Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
+    <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+    
+    <!-- Our streaming handler -->
+    <script src="/static/js/chat-streaming.js" defer></script>
+</head>
+<body hx-ext="sse">
+    <div class="chat-container">
+        <!-- Header -->
+        <header class="chat-header">
+            <h1>SmolLM3 Chat</h1>
+            <div class="header-controls">
+                <label class="thinking-toggle">
+                    <input type="checkbox" 
+                           id="thinking-mode"
+                           hx-post="/api/toggle-thinking"
+                           hx-trigger="change"
+                           {% if thinking_mode %}checked{% endif %}>
+                    <span>Show Thinking</span>
+                </label>
+            </div>
+        </header>
+        
+        <!-- Persistent SSE Connection -->
+        <div id="sse-connection" 
+             sse-connect="/api/stream/{{ session_id }}"
+             sse-close="session-end">
+        </div>
+        
+        <!-- Messages Container -->
+        <main id="messages" class="messages-container">
+            {% for message in messages %}
+                {{ render_message(message) }}
+            {% endfor %}
+        </main>
+        
+        <!-- Input Form -->
+        <footer class="chat-input">
+            <form hx-post="/api/send" 
+                  hx-target="#messages" 
+                  hx-swap="beforeend"
+                  hx-indicator="#sending-indicator">
+                
+                <input type="hidden" name="session_id" value="{{ session_id }}">
+                
+                <div class="input-wrapper">
+                    <textarea name="message" 
+                              placeholder="Type your message..." 
+                              rows="1"
+                              required
+                              autocomplete="off"
+                              hx-trigger="keydown[ctrlKey&&key=='Enter'] from:this"></textarea>
+                    
+                    <button type="submit" class="send-button">
+                        <svg><!-- send icon --></svg>
+                    </button>
+                </div>
+                
+                <div id="sending-indicator" class="htmx-indicator">
+                    Sending...
+                </div>
+            </form>
+            
+            <!-- Slash commands menu -->
+            <div id="slash-commands" style="display: none;">
+                <!-- Populated by slash-commands.js -->
+            </div>
+        </footer>
+    </div>
+    
+    <!-- SSE Event Handler Script -->
+    <script>
+        // Configure HTMX SSE handling
+        document.body.addEventListener('htmx:sseOpen', function(evt) {
+            console.log('SSE connection established');
+        });
+        
+        document.body.addEventListener('htmx:sseError', function(evt) {
+            console.error('SSE error:', evt.detail);
+            // Attempt reconnection after 5 seconds
+            setTimeout(() => {
+                htmx.trigger('#sse-connection', 'htmx:sseReconnect');
+            }, 5000);
+        });
+        
+        // Handle custom SSE events
+        document.body.addEventListener('sse:message', function(evt) {
+            const data = JSON.parse(evt.detail.data);
+            
+            // Route to appropriate handler based on event type
+            if (data.target && data.html) {
+                const target = document.querySelector(data.target);
+                if (target) {
+                    switch(data.action) {
+                        case 'append':
+                            target.insertAdjacentHTML('beforeend', data.html);
+                            break;
+                        case 'replace':
+                            target.innerHTML = data.html;
+                            break;
+                        case 'morph':
+                            // Use idiomorph if available
+                            if (typeof Idiomorph !== 'undefined') {
+                                Idiomorph.morph(target, data.html);
+                            } else {
+                                target.innerHTML = data.html;
+                            }
+                            break;
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

@@ -28,39 +28,46 @@ pub struct ChatResponse {
     html: String,
 }
 
-/// Handle chat message submission
+/// Handle chat message submission (optimized for persistent SSE)
 pub async fn send_message(
     State(state): State<AppState>,
     Form(msg): Form<ChatMessage>,
 ) -> Html<String> {
     let message_id = Uuid::new_v4().to_string();
     
-    // Always return the same HTML structure for all messages
+    // Return HTML without SSE connection (using existing persistent connection)
     let html = format!(
         r#"<div class="message user">
             <div class="message-bubble">{}</div>
         </div>
         <div class="message assistant" id="msg-{}">
-            <div class="message-bubble" 
-                 hx-ext="sse"
-                 sse-connect="/api/stream/{}" 
-                 sse-swap="innerHTML"
-                 sse-close="complete">
+            <div class="message-bubble">
                 <span class="loading">Thinking...</span>
             </div>
         </div>"#,
         html_escape::encode_text(&msg.message),
-        message_id,
-        msg.session_id  // Use standard session streaming
+        message_id
     );
     
     // Clone values for the spawned task
     let session_id = msg.session_id.clone();
     let message = msg.message.clone();
     let state_clone = state.clone();
+    let msg_id = message_id.clone();
     
     // Handle command or model generation in background
     tokio::spawn(async move {
+        // Send a targeted event for this specific message
+        let sender = {
+            let mut sessions = state_clone.sessions.write().await;
+            sessions.get_or_create_sender(&session_id)
+        };
+        
+        // Send message start event with target ID
+        let _ = sender.send(StreamEvent::Content(
+            format!("<div hx-target='#msg-{}' hx-swap='innerHTML'></div>", msg_id)
+        )).await;
+        
         if message.starts_with("/quote") {
             // Use buffered streaming for quote
             let _ = stream_quote_buffered(state_clone, session_id).await;
@@ -78,10 +85,11 @@ pub async fn stream_events(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // Get the receiver for this session
+    // Get or create the receiver for this session
     let receiver = {
-        let sessions = state.sessions.read().await;
-        sessions.get_event_receiver(&session_id)
+        let mut sessions = state.sessions.write().await;
+        sessions.take_receiver(&session_id)
+            .expect("Receiver should be available for new SSE connection")
     };
     
     // Create stream from receiver

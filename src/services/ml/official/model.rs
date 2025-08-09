@@ -56,7 +56,7 @@ impl SmolLM3Model {
         &self,
         input_ids: &Tensor,
         _position_ids: Option<&Tensor>,
-        _kv_cache: Option<&mut crate::smollm3::kv_cache::SmolLM3KVCache>,
+        _kv_cache: Option<&mut crate::services::ml::smollm3::kv_cache::SmolLM3KVCache>,
     ) -> Result<Tensor> {
         // The official ModelWeights doesn't have a direct forward method
         // We'll use the forward_full implementation from llama_forward module

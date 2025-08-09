@@ -3,7 +3,7 @@
 
 use candle_core::{Device, Result, Tensor, D};
 use candle_transformers::models::quantized_llama::ModelWeights;
-use crate::smollm3::kv_cache::SmolLM3KVCache;
+use crate::services::ml::smollm3::kv_cache::SmolLM3KVCache;
 
 /// Implements the full forward pass for SmolLM3 using ModelWeights
 pub struct LlamaForward<'a> {

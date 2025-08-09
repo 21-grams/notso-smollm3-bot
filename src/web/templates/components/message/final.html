@@ -1,0 +1,14 @@
+{# Final message state after streaming completes #}
+<div class="message-content final" id="content-{{ message_id }}">
+    <div class="markdown-body">
+        {{ rendered_markdown|safe }}
+    </div>
+</div>
+
+{# Show actions after completion #}
+<script>
+    document.getElementById('actions-{{ message_id }}').style.display = 'flex';
+    document.getElementById('footer-{{ message_id }}').style.display = 'flex';
+    document.querySelector('#footer-{{ message_id }} .token-count').textContent = '{{ token_count }} tokens';
+    document.querySelector('#footer-{{ message_id }} .generation-time').textContent = '{{ generation_time }}ms';
+</script>

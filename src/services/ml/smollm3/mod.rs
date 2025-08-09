@@ -4,7 +4,7 @@ mod adapter;
 mod chat_template;
 mod thinking;
 mod generation;
-mod kv_cache;
+pub mod kv_cache;  // Make public for official module to access
 mod nope_layers;
 mod tokenizer_ext;
 mod stub_mode;

@@ -20,8 +20,8 @@ impl StreamingBuffer {
         Self {
             session_id,
             buffer: Vec::new(),
-            token_threshold: 10,  // Flush after 10 tokens
-            time_threshold: Duration::from_millis(100),  // Or after 100ms
+            token_threshold: 10,  // Keep at 10 tokens for reasonable batching
+            time_threshold: Duration::from_millis(500),  // Changed from 100ms to 500ms
             last_flush: Instant::now(),
             sender,
         }
