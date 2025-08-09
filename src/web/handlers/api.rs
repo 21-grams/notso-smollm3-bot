@@ -92,7 +92,7 @@ pub async fn stream_session(
     // Create stream from receiver
     let stream = ReceiverStream::new(receiver)
         .map(|event| {
-            tracing::debug!("Processing SSE event: {:?}", event);
+            tracing::info!("Processing SSE event: {:?}", event);
             let sse_event = match event {
                 StreamEvent::MessageContent { message_id, content } => {
                     // Send raw text/markdown - NO HTML escaping
@@ -155,7 +155,7 @@ async fn stream_quote_buffered(
     session_id: String,
     message_id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::debug!("Starting quote streaming for message {}", message_id);
+    tracing::info!("Starting quote streaming for message {}", message_id);
     
     // Get session's event sender
     let sender = {
@@ -166,7 +166,7 @@ async fn stream_quote_buffered(
     // Create streaming buffer with the provided message ID
     let mut buffer = StreamingBuffer::new(sender, message_id.clone());
     
-    tracing::debug!("Created buffer, starting to stream quote");
+    tracing::info!("Created buffer, starting to stream quote");
     
     // The Gospel of John 1:1-14 text
     let scripture_text = r#"# Gospel of John 1:1-14

@@ -26,8 +26,8 @@ impl StreamingBuffer {
         self.buffer.push_str(content);
         self.token_count += 1;
         
-        // Send if we have 10 tokens or 100ms elapsed
-        if self.token_count >= 10 || self.last_send.elapsed() > Duration::from_millis(100) {
+        // Send if we have 10 tokens or 500ms elapsed
+        if self.token_count >= 10 || self.last_send.elapsed() > Duration::from_millis(500) {
             self.flush().await?;
         }
         Ok(())
@@ -35,6 +35,7 @@ impl StreamingBuffer {
     
     async fn flush(&mut self) -> Result<()> {
         if !self.buffer.is_empty() {
+            tracing::debug!("Flushing buffer with {} chars for message {}", self.buffer.len(), self.message_id);
             let event = StreamEvent::MessageContent {
                 message_id: self.message_id.clone(),
                 content: self.buffer.clone(),
@@ -49,6 +50,7 @@ impl StreamingBuffer {
     
     pub async fn complete(&mut self) -> Result<()> {
         self.flush().await?;
+        tracing::info!("Sending complete event for message {}", self.message_id);
         self.sender.send(StreamEvent::MessageComplete {
             message_id: self.message_id.clone(),
         }).await?;

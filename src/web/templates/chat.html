@@ -87,6 +87,39 @@
     <script>
         console.log('[SmolLM3] Chat initialized with session: {{ session_id }}');
         
+        // SSE connection status tracking
+        let sseConnected = false;
+        
+        // Monitor SSE connection
+        document.body.addEventListener('htmx:sseOpen', function(evt) {
+            console.log('[SSE] Connection opened');
+            sseConnected = true;
+            updateConnectionStatus(true);
+        });
+        
+        document.body.addEventListener('htmx:sseError', function(evt) {
+            console.log('[SSE] Connection error:', evt.detail);
+            sseConnected = false;
+            updateConnectionStatus(false);
+        });
+        
+        document.body.addEventListener('htmx:sseClose', function(evt) {
+            console.log('[SSE] Connection closed');
+            sseConnected = false;
+            updateConnectionStatus(false);
+        });
+        
+        function updateConnectionStatus(connected) {
+            const statusBadge = document.querySelector('.status-badge');
+            if (statusBadge) {
+                if (connected) {
+                    statusBadge.style.color = '#4CAF50';
+                } else {
+                    statusBadge.style.color = '#f44336';
+                }
+            }
+        }
+        
         // Configure marked for safe markdown rendering
         marked.setOptions({
             breaks: true,
@@ -94,8 +127,9 @@
             sanitize: false
         });
         
-        // Listen for HTMX SSE events
-        document.body.addEventListener('sse:message', function(evt) {
+        // Listen for HTMX SSE events (htmx prefix for v2.0)
+        document.body.addEventListener('htmx:sse:message', function(evt) {
+            console.log('[SSE] Message event received:', evt.detail);
             // SSE message format: "messageId|content"
             const data = evt.detail.data;
             const [messageId, ...contentParts] = data.split('|');
@@ -108,12 +142,17 @@
                 if (loading) loading.remove();
                 
                 // Append raw text/markdown to existing content
-                messageEl.innerHTML += content;
+                // Store in data attribute to preserve raw markdown
+                const currentContent = messageEl.dataset.rawContent || '';
+                messageEl.dataset.rawContent = currentContent + content;
+                // Show plain text while streaming
+                messageEl.textContent = messageEl.dataset.rawContent;
             }
         });
         
         // Handle completion event - trigger markdown rendering
-        document.body.addEventListener('sse:complete', function(evt) {
+        document.body.addEventListener('htmx:sse:complete', function(evt) {
+            console.log('[SSE] Complete event received:', evt.detail);
             const messageId = evt.detail.data;
             const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
             
@@ -122,8 +161,8 @@
                 const loading = messageEl.querySelector('.loading');
                 if (loading) loading.remove();
                 
-                // Get the accumulated raw text/markdown
-                const rawContent = messageEl.innerHTML;
+                // Get the accumulated raw text/markdown from data attribute
+                const rawContent = messageEl.dataset.rawContent || messageEl.textContent;
                 
                 // Render markdown to formatted HTML
                 const formattedHtml = marked.parse(rawContent);
@@ -138,7 +177,8 @@
         });
         
         // Handle error events
-        document.body.addEventListener('sse:message-error', function(evt) {
+        document.body.addEventListener('htmx:sse:message-error', function(evt) {
+            console.log('[SSE] Error event received:', evt.detail);
             const [messageId, error] = evt.detail.data.split('|');
             const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
             
