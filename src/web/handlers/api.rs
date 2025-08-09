@@ -34,6 +34,7 @@ pub async fn send_message(
     Form(msg): Form<ChatMessage>,
 ) -> Html<String> {
     let message_id = Uuid::now_v7().to_string();
+    tracing::info!("Received message: '{}' for session: {}", msg.message, msg.session_id);
     
     // Return HTML without SSE connection (using existing persistent connection)
     let html = format!(
@@ -57,23 +58,16 @@ pub async fn send_message(
     
     // Handle command or model generation in background
     tokio::spawn(async move {
-        // Send a targeted event for this specific message
-        let sender = {
-            let mut sessions = state_clone.sessions.write().await;
-            sessions.get_or_create_sender(&session_id)
-        };
-        
-        // Send message start event with target ID
-        let _ = sender.send(StreamEvent::Content(
-            format!("<div hx-target='#msg-{}' hx-swap='innerHTML'></div>", msg_id)
-        )).await;
+        tracing::debug!("Processing message in background task");
         
         if message.starts_with("/quote") {
             // Use buffered streaming for quote
-            let _ = stream_quote_buffered(state_clone, session_id).await;
+            tracing::info!("Processing /quote command");
+            let _ = stream_quote_buffered(state_clone, session_id, msg_id).await;
         } else {
             // Regular model generation (also uses buffer)
-            let _ = generate_response_buffered(state_clone, session_id, message).await;
+            tracing::info!("Processing regular message");
+            let _ = generate_response_buffered(state_clone, session_id, message, msg_id).await;
         }
     });
     
@@ -85,17 +79,44 @@ pub async fn stream_session(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    // Get or create the receiver for this session
+    tracing::info!("SSE connection request for session: {}", session_id);
+    
+    // Ensure session exists and has a receiver
     let receiver = {
         let mut sessions = state.sessions.write().await;
+        sessions.create_session(&session_id);  // This now handles reconnections
         sessions.take_receiver(&session_id)
-            .expect("Receiver should be available for new SSE connection")
+            .expect("Receiver should be available after create_session")
     };
     
     // Create stream from receiver
     let stream = ReceiverStream::new(receiver)
         .map(|event| {
+            tracing::debug!("Processing SSE event: {:?}", event);
             let sse_event = match event {
+                StreamEvent::MessageContent { message_id, content } => {
+                    Event::default()
+                        .event("message")
+                        .data(format!(
+                            "{}|{}",
+                            message_id,
+                            html_escape::encode_text(&content)
+                        ))
+                }
+                StreamEvent::MessageComplete { message_id } => {
+                    Event::default()
+                        .event("complete")
+                        .data(message_id)
+                }
+                StreamEvent::MessageError { message_id, error } => {
+                    Event::default()
+                        .event("message-error")
+                        .data(format!(
+                            r#"<div hx-target='#msg-{}' hx-swap='innerHTML'><div class='error-message'>{}</div></div>"#,
+                            message_id, error
+                        ))
+                }
+                // Legacy events for compatibility
                 StreamEvent::Content(text) => {
                     Event::default()
                         .event("message")
@@ -131,16 +152,20 @@ pub async fn stream_session(
 async fn stream_quote_buffered(
     state: AppState,
     session_id: String,
+    message_id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::debug!("Starting quote streaming for message {}", message_id);
+    
     // Get session's event sender
     let sender = {
         let mut sessions = state.sessions.write().await;
         sessions.get_or_create_sender(&session_id)
     };
     
-    // Create streaming buffer with a message ID
-    let message_id = uuid::Uuid::now_v7().to_string();
-    let mut buffer = StreamingBuffer::new(sender, message_id);
+    // Create streaming buffer with the provided message ID
+    let mut buffer = StreamingBuffer::new(sender, message_id.clone());
+    
+    tracing::debug!("Created buffer, starting to stream quote");
     
     // The Gospel of John 1:1-14 text
     let scripture_text = r#"# Gospel of John 1:1-14
@@ -196,6 +221,7 @@ async fn generate_response_buffered(
     state: AppState,
     session_id: String,
     message: String,
+    message_id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get session's event sender
     let sender = {
@@ -203,8 +229,7 @@ async fn generate_response_buffered(
         sessions.get_or_create_sender(&session_id)
     };
     
-    // Create streaming buffer with a message ID
-    let message_id = uuid::Uuid::now_v7().to_string();
+    // Create streaming buffer with the provided message ID
     let mut buffer = StreamingBuffer::new(sender, message_id);
     
     // Check if model is available and generate accordingly
@@ -222,8 +247,8 @@ async fn generate_response_buffered(
             }
         }
         None => {
-            // No model loaded, stream fallback message
-            let fallback = "Model not loaded. Using FTS5 search on cached conversations (TODO).";
+            // No model loaded, stream fallback message  
+            let fallback = "Model not loaded. Using FTS5 search on cached conversations. (This is a placeholder - FTS5 integration coming soon)";
             for word in fallback.split_whitespace() {
                 buffer.push(&format!("{} ", word)).await?;
                 tokio::time::sleep(Duration::from_millis(30)).await;

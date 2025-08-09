@@ -27,7 +27,7 @@ impl MLService {
     pub async fn generate_streaming(
         &self,
         _prompt: &str,
-        buffer: &mut crate::services::StreamingBuffer,
+        _buffer: &mut crate::services::StreamingBuffer,
     ) -> anyhow::Result<()> {
         // TODO: Implement actual model inference here
         // For now, return an error to indicate model is not ready

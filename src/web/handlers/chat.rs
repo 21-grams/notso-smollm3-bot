@@ -13,11 +13,19 @@ pub async fn index(State(state): State<AppState>) -> Html<String> {
     // Initialize session
     state.sessions.write().await.create_session(&session_id);
     
+    // Check model status
+    let model_status = if state.model.read().await.is_some() {
+        "🟢 Model Online"
+    } else {
+        "🔴 Model Offline - Using Fallback"
+    };
+    
     // Read and render the single chat template
     let html = if let Ok(tmpl_content) = std::fs::read_to_string("src/web/templates/chat.html") {
         // Replace template variables
         tmpl_content
             .replace("{{ session_id }}", &session_id)
+            .replace("{{ model_status }}", model_status)
             .replace("{% if thinking_mode %}checked{% endif %}", 
                      if state.config.thinking_mode_default { "checked" } else { "" })
     } else {

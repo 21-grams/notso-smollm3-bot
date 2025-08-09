@@ -18,12 +18,13 @@
         <div id="sse-handler"
              hx-ext="sse"
              sse-connect="/api/stream/{{ session_id }}"
+             sse-swap="message-content,message-complete,message-error"
              style="display: none;">
         </div>
         <div class="chat-header">
             <h1>SmolLM3 Chat</h1>
             <div class="system-status" id="system-status">
-                <span class="status-badge">Ready</span>
+                <span class="status-badge">{{ model_status }}</span>
                 <span class="command-hint">Type / for commands</span>
             </div>
         </div>
@@ -91,6 +92,33 @@
     <!-- Chat functionality with markdown support -->
     <script>
         console.log('[SmolLM3] Chat initialized with session: {{ session_id }}');
+        
+        // Set up SSE event handling
+        const eventSource = new EventSource('/api/stream/{{ session_id }}');
+        
+        eventSource.addEventListener('message', function(e) {
+            console.log('[SSE] Message event:', e.data);
+            const [messageId, content] = e.data.split('|');
+            const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
+            if (messageEl) {
+                // Remove loading indicator if present
+                const loading = messageEl.querySelector('.loading');
+                if (loading) loading.remove();
+                // Update content
+                messageEl.innerHTML = content;
+            }
+        });
+        
+        eventSource.addEventListener('complete', function(e) {
+            console.log('[SSE] Complete event:', e.data);
+            const messageId = e.data;
+            const loadingEl = document.querySelector(`#msg-${messageId} .loading`);
+            if (loadingEl) loadingEl.remove();
+        });
+        
+        eventSource.addEventListener('error', function(e) {
+            console.error('[SSE] Error:', e);
+        });
         
         // Configure marked for safe markdown rendering
         marked.setOptions({

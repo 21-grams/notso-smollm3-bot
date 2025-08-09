@@ -40,7 +40,18 @@ impl SessionManager {
     }
     
     pub fn create_session(&mut self, session_id: &str) {
-        if !self.sessions.contains_key(session_id) {
+        // Always recreate the receiver if it's been taken
+        if let Some(session) = self.sessions.get_mut(session_id) {
+            if session.event_receiver.is_none() {
+                // Receiver was taken, create a new channel
+                let (tx, rx) = mpsc::channel(100);
+                session.event_sender = tx;
+                session.event_receiver = Some(rx);
+                session.last_activity = Utc::now();
+                tracing::debug!("Recreated SSE channel for existing session: {}", session_id);
+            }
+        } else {
+            // Create new session
             let (tx, rx) = mpsc::channel(100);
             
             let session = SessionState {
@@ -54,6 +65,7 @@ impl SessionManager {
             };
             
             self.sessions.insert(session_id.to_string(), session);
+            tracing::debug!("Created new session: {}", session_id);
         }
     }
     
