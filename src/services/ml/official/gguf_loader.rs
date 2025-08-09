@@ -1,11 +1,196 @@
-//! Custom GGUF loader for SmolLM3 that handles missing metadata gracefully
+//! Enhanced GGUF loader that maps SmolLM3 metadata to Llama format
+//! This allows us to use candle_transformers::models::quantized_llama directly
 
-use candle_core::quantized::{gguf_file, QTensor};
+use candle_core::quantized::gguf_file::{Content, Value};
 use candle_core::{Device, Result};
-use candle_transformers::models::quantized_llama::ModelWeights;
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::Path;
-use std::io::{Seek, SeekFrom};
+
+/// Comprehensive metadata mapping for SmolLM3 to Llama compatibility
+pub fn map_smollm3_to_llama_metadata(content: &mut Content) {
+    tracing::info!("🔄 Mapping SmolLM3 metadata to Llama format");
+    
+    // Define all possible SmolLM3 key variations and their Llama equivalents
+    let key_mappings = [
+        // Attention configuration
+        (vec!["smollm3.attention.head_count", "smollm.attention_head_count", "attention.n_heads"], 
+         "llama.attention.head_count", Value::U32(32)),
+        (vec!["smollm3.attention.head_count_kv", "smollm.attention_head_count_kv", "attention.n_kv_heads"], 
+         "llama.attention.head_count_kv", Value::U32(8)),
+        
+        // Model architecture
+        (vec!["smollm3.block_count", "smollm.n_layer", "n_layers", "block_count"], 
+         "llama.block_count", Value::U32(36)),
+        (vec!["smollm3.context_length", "smollm.max_seq_len", "max_position_embeddings"], 
+         "llama.context_length", Value::U32(131072)),
+        (vec!["smollm3.embedding_length", "smollm.hidden_size", "hidden_size", "d_model"], 
+         "llama.embedding_length", Value::U32(3072)),
+        (vec!["smollm3.feed_forward_length", "smollm.intermediate_size", "intermediate_size"], 
+         "llama.feed_forward_length", Value::U32(8192)),
+        
+        // Vocabulary
+        (vec!["smollm3.vocab_size", "tokenizer.ggml.model.vocab_size", "vocab_size"], 
+         "llama.vocab_size", Value::U32(128256)),
+        
+        // RoPE configuration
+        (vec!["smollm3.rope.theta", "rope.theta", "rope_theta"], 
+         "llama.rope.freq_base", Value::F32(1000000.0)),
+        (vec!["smollm3.rope.dimension_count", "rope.dim", "rope_dim"], 
+         "llama.rope.dimension_count", Value::U32(128)),
+        
+        // Normalization
+        (vec!["smollm3.attention.layer_norm_rms_epsilon", "rms_norm_eps", "norm_eps"], 
+         "llama.attention.layer_norm_rms_epsilon", Value::F32(1e-5)),
+    ];
+    
+    // Track what we find and map
+    let mut mapped_keys = Vec::new();
+    let mut found_keys = HashMap::new();
+    
+    for (possible_keys, llama_key, default_value) in &key_mappings {
+        // Check if Llama key already exists
+        if content.metadata.contains_key(*llama_key) {
+            continue;
+        }
+        
+        // Try to find value from SmolLM3 keys
+        let mut value_found = None;
+        for smollm_key in possible_keys {
+            if let Some(value) = content.metadata.get(*smollm_key) {
+                value_found = Some(value.clone());
+                found_keys.insert(smollm_key.to_string(), llama_key.to_string());
+                break;
+            }
+        }
+        
+        // Insert found value or default
+        if let Some(value) = value_found {
+            content.metadata.insert(llama_key.to_string(), value);
+            mapped_keys.push(format!("{} (from SmolLM3)", llama_key));
+        } else {
+            content.metadata.insert(llama_key.to_string(), default_value.clone());
+            mapped_keys.push(format!("{} (default)", llama_key));
+        }
+    }
+    
+    // Special handling for architecture type
+    if !content.metadata.contains_key("general.architecture") {
+        content.metadata.insert("general.architecture".to_string(), Value::String("llama".to_string()));
+    }
+    
+    // Add rope scaling if not present (SmolLM3 uses extended context)
+    if !content.metadata.contains_key("llama.rope.scaling.type") {
+        content.metadata.insert("llama.rope.scaling.type".to_string(), Value::String("linear".to_string()));
+        content.metadata.insert("llama.rope.scaling.factor".to_string(), Value::F32(2.0));
+    }
+    
+    tracing::info!("✅ Mapped {} metadata keys", mapped_keys.len());
+    for key in &mapped_keys {
+        tracing::debug!("  - {}", key);
+    }
+    
+    if !found_keys.is_empty() {
+        tracing::info!("📋 SmolLM3 to Llama key mappings:");
+        for (from, to) in &found_keys {
+            tracing::debug!("  {} -> {}", from, to);
+        }
+    }
+}
+
+/// Load GGUF file with SmolLM3 compatibility
+pub fn load_smollm3_gguf<P: AsRef<Path>>(path: P, _device: &Device) -> Result<Content> {
+    let path = path.as_ref();
+    tracing::info!("📂 Loading GGUF from: {:?}", path);
+    
+    // Validate file exists and has reasonable size
+    if !path.exists() {
+        candle_core::bail!("GGUF file not found: {:?}", path);
+    }
+    
+    let metadata = std::fs::metadata(path)?;
+    let size_gb = metadata.len() as f64 / (1024.0 * 1024.0 * 1024.0);
+    tracing::info!("📦 GGUF file size: {:.2} GB", size_gb);
+    
+    if size_gb < 0.5 {
+        tracing::warn!("⚠️ GGUF file seems small for a 3B model: {:.2} GB", size_gb);
+    }
+    
+    // Read GGUF content
+    let mut file = File::open(path)?;
+    let mut content = Content::read(&mut file)?;
+    
+    tracing::info!("📊 GGUF content: {} tensors, {} metadata entries",
+                  content.tensor_infos.len(),
+                  content.metadata.len());
+    
+    // Log original architecture if present
+    if let Some(arch) = content.metadata.get("general.architecture") {
+        tracing::info!("🏗️ Original architecture: {:?}", arch);
+    }
+    
+    // Apply SmolLM3 to Llama metadata mapping
+    map_smollm3_to_llama_metadata(&mut content);
+    
+    // Validate critical metadata after mapping
+    validate_llama_metadata(&content)?;
+    
+    Ok(content)
+}
+
+/// Validate that all required Llama metadata is present
+fn validate_llama_metadata(content: &Content) -> Result<()> {
+    let required_keys = [
+        "llama.attention.head_count",
+        "llama.attention.head_count_kv",
+        "llama.block_count",
+        "llama.embedding_length",
+        "llama.vocab_size",
+    ];
+    
+    let mut missing = Vec::new();
+    for key in &required_keys {
+        if !content.metadata.contains_key(*key) {
+            missing.push(*key);
+        }
+    }
+    
+    if !missing.is_empty() {
+        candle_core::bail!("Missing required Llama metadata after mapping: {:?}", missing);
+    }
+    
+    tracing::info!("✅ All required Llama metadata present");
+    Ok(())
+}
+
+/// Get a metadata value as u32, trying multiple key variations
+pub fn get_metadata_u32(content: &Content, keys: &[&str]) -> Option<u32> {
+    for key in keys {
+        match content.metadata.get(*key) {
+            Some(Value::U32(val)) => return Some(*val),
+            Some(Value::U64(val)) => return Some(*val as u32),
+            Some(Value::I32(val)) => return Some(*val as u32),
+            Some(Value::U16(val)) => return Some(*val as u32),
+            Some(Value::U8(val)) => return Some(*val as u32),
+            _ => continue,
+        }
+    }
+    None
+}
+
+/// Get a metadata value as f32, trying multiple key variations  
+pub fn get_metadata_f32(content: &Content, keys: &[&str]) -> Option<f32> {
+    for key in keys {
+        match content.metadata.get(*key) {
+            Some(Value::F32(val)) => return Some(*val),
+            Some(Value::F64(val)) => return Some(*val as f32),
+            _ => continue,
+        }
+    }
+    None
+}
+
+// Legacy functions for backward compatibility
 
 /// Inspect GGUF file metadata and return a detailed report
 pub fn inspect_gguf<P: AsRef<Path>>(path: P) -> Result<GgufInspectionReport> {
@@ -106,121 +291,32 @@ impl GgufInspectionReport {
     }
 }
 
-/// Custom loader that works with SmolLM3 GGUF files
+use candle_core::quantized::gguf_file;
+
+/// Custom loader that works with SmolLM3 GGUF files (legacy)
 pub struct SmolLM3GgufLoader;
 
 impl SmolLM3GgufLoader {
     /// Load GGUF file with SmolLM3-specific handling
     pub fn load_gguf<P: AsRef<Path>>(
         path: P,
-        _device: &Device,
-    ) -> Result<(gguf_file::Content, HashMap<String, QTensor>)> {
-        tracing::info!("📦 Loading SmolLM3 GGUF file");
-        
-        let mut file = std::fs::File::open(path.as_ref())?;
-        let content = gguf_file::Content::read(&mut file)?;
-        
-        // Log what we found
-        tracing::info!("📊 GGUF content: {} tensors, {} metadata entries",
-                      content.tensor_infos.len(),
-                      content.metadata.len());
-        
-        // Check architecture
-        if let Some(arch) = content.metadata.get("general.architecture") {
-            tracing::info!("🏗️ Architecture: {:?}", arch);
-        }
-        
-        // Extract model dimensions from metadata with fallbacks
-        let n_heads = Self::get_metadata_u32(&content, &[
-            "llama.attention.head_count",
-            "llama.attention_head_count",  // Alternative key
-            "attention.head_count",
-        ]).unwrap_or(32);  // SmolLM3-3B default
-        
-        let n_kv_heads = Self::get_metadata_u32(&content, &[
-            "llama.attention.head_count_kv",
-            "llama.attention_head_count_kv",
-            "attention.head_count_kv",
-        ]).unwrap_or(8);  // SmolLM3-3B uses GQA with 8 KV heads
-        
-        let n_layers = Self::get_metadata_u32(&content, &[
-            "llama.block_count",
-            "llama.layer_count",
-            "block_count",
-        ]).unwrap_or(36);  // SmolLM3-3B has 36 layers
-        
-        let hidden_size = Self::get_metadata_u32(&content, &[
-            "llama.embedding_length",
-            "llama.hidden_size",
-            "hidden_size",
-        ]).unwrap_or(3072);  // SmolLM3-3B hidden size
-        
-        let vocab_size = Self::get_metadata_u32(&content, &[
-            "llama.vocab_size",
-            "tokenizer.ggml.model.vocab_size",
-            "vocab_size",
-        ]).unwrap_or(50304);  // SmolLM3 vocab size
-        
-        tracing::info!("📐 Model dimensions: heads={}, kv_heads={}, layers={}, hidden={}, vocab={}",
-                      n_heads, n_kv_heads, n_layers, hidden_size, vocab_size);
-        
-        // Load tensors
-        let tensors = HashMap::new();
-        let tensor_start_offset = content.tensor_data_offset;
-        file.seek(SeekFrom::Start(tensor_start_offset))?;
-        
-        // Note: QTensor loading from GGUF requires the correct implementation
-        // For now, we'll return empty tensors map and focus on metadata
-        // Real implementation would iterate through tensor_infos and load each
-        
-        tracing::info!("✅ Loaded {} tensors", tensors.len());
-        
+        device: &Device,
+    ) -> Result<(gguf_file::Content, HashMap<String, candle_core::quantized::QTensor>)> {
+        let content = load_smollm3_gguf(path, device)?;
+        let tensors = HashMap::new(); // Tensors will be loaded by ModelWeights::from_gguf
         Ok((content, tensors))
     }
     
     /// Try to get metadata with multiple possible keys
     fn get_metadata_u32(content: &gguf_file::Content, keys: &[&str]) -> Option<u32> {
-        for key in keys {
-            if let Some(gguf_file::Value::U32(val)) = content.metadata.get(*key) {
-                return Some(*val);
-            }
-            if let Some(gguf_file::Value::U64(val)) = content.metadata.get(*key) {
-                return Some(*val as u32);
-            }
-            if let Some(gguf_file::Value::I32(val)) = content.metadata.get(*key) {
-                return Some(*val as u32);
-            }
-        }
-        None
+        get_metadata_u32(content, keys)
     }
     
     /// Create a config from GGUF metadata
     pub fn config_from_gguf(content: &gguf_file::Content) -> super::config::SmolLM3Config {
-        use super::config::SmolLM3Config;
-        
-        let mut config = SmolLM3Config::default();
-        
-        // Update config from metadata if available
-        if let Some(val) = Self::get_metadata_u32(content, &["llama.attention.head_count", "attention.head_count"]) {
-            config.base.num_attention_heads = val as usize;
-        }
-        if let Some(val) = Self::get_metadata_u32(content, &["llama.attention.head_count_kv", "attention.head_count_kv"]) {
-            config.base.num_key_value_heads = val as usize;
-        }
-        if let Some(val) = Self::get_metadata_u32(content, &["llama.block_count", "block_count"]) {
-            config.base.num_hidden_layers = val as usize;
-        }
-        if let Some(val) = Self::get_metadata_u32(content, &["llama.embedding_length", "hidden_size"]) {
-            config.base.hidden_size = val as usize;
-        }
-        if let Some(val) = Self::get_metadata_u32(content, &["llama.vocab_size", "vocab_size"]) {
-            config.base.vocab_size = val as usize;
-        }
-        if let Some(val) = Self::get_metadata_u32(content, &["llama.context_length", "context_length"]) {
-            config.base.max_position_embeddings = val as usize;
-        }
-        
-        config
+        super::config::SmolLM3Config::from_gguf(content).unwrap_or_else(|_| {
+            super::config::SmolLM3Config::default()
+        })
     }
 }
 
@@ -228,11 +324,8 @@ impl SmolLM3GgufLoader {
 pub fn try_load_as_quantized_llama<P: AsRef<Path>>(
     path: P,
     device: &Device,
-) -> Result<ModelWeights> {
-    let mut file = std::fs::File::open(path.as_ref())?;
-    let content = gguf_file::Content::read(&mut file)?;
-    
-    // Try to create ModelWeights, but handle missing metadata
-    // This might fail if required keys are missing
-    ModelWeights::from_gguf(content, &mut file, device)
+) -> Result<candle_transformers::models::quantized_llama::ModelWeights> {
+    let content = load_smollm3_gguf(&path, device)?;
+    let mut file = std::fs::File::open(path)?;
+    candle_transformers::models::quantized_llama::ModelWeights::from_gguf(content, &mut file, device)
 }

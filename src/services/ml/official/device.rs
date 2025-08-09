@@ -1,4 +1,4 @@
-//! Device management utilities
+//! Device management utilities for Candle v0.9.1
 
 use candle_core::{Device, Result};
 
@@ -8,7 +8,7 @@ impl DeviceManager {
     /// Detect optimal device based on availability
     pub fn detect_optimal_device() -> Result<Device> {
         // Try CUDA first
-        if let Ok(device) = Device::new_cuda(0) {
+        if let Ok(device) = Device::cuda_if_available(0) {
             tracing::info!("🎮 Using CUDA device");
             return Ok(device);
         }
@@ -38,9 +38,14 @@ impl DeviceManager {
     pub fn supports_operation(device: &Device, op: &str) -> bool {
         match (device, op) {
             (Device::Cpu, _) => true,  // CPU supports all ops
-            (Device::Cuda(_), "flash_attention") => true,
+            (Device::Cuda(_), "flash_attention") => false, // Not yet in Candle 0.9.1
             (Device::Metal(_), "flash_attention") => false,
             _ => true,
         }
     }
+}
+
+/// Simple function to get the optimal device
+pub fn get_device() -> Result<Device> {
+    DeviceManager::detect_optimal_device()
 }

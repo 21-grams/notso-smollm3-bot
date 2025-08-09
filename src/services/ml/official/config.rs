@@ -1,147 +1,105 @@
-use candle_transformers::models::llama::{Config as LlamaConfig, LlamaEosToks};
-use serde::{Deserialize, Serialize};
+//! SmolLM3-specific configuration extending Llama config
 
-/// Minimal config that matches what LlamaConfig actually has
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CustomLlamaConfig {
-    pub vocab_size: usize,
-    pub hidden_size: usize,
-    pub num_hidden_layers: usize,
-    pub num_attention_heads: usize,
-    pub num_key_value_heads: usize,
-    pub intermediate_size: usize,
-    pub rope_theta: f32,  // Actually f32, not f64
-    pub rms_norm_eps: f64,
-    pub max_position_embeddings: usize,
+use candle_core::Result;
+use candle_core::quantized::gguf_file::Content;
+
+/// SmolLM3-specific configuration extending Llama config
+#[derive(Clone, Debug)]
+pub struct SmolLM3Config {
+    /// Base Llama configuration
+    pub base: candle_transformers::models::quantized_llama::Config,
+    /// Enable thinking mode
+    pub enable_thinking: bool,
+    /// Thinking token IDs
+    pub think_token_id: u32,
+    pub think_end_token_id: u32,
+    /// NoPE layer indices (every 4th layer starting from 3)
+    pub nope_layer_indices: Vec<usize>,
 }
 
-impl From<CustomLlamaConfig> for LlamaConfig {
-    fn from(custom: CustomLlamaConfig) -> Self {
-        // Only set fields that actually exist in LlamaConfig
-        LlamaConfig {
-            vocab_size: custom.vocab_size,
-            hidden_size: custom.hidden_size,
-            num_hidden_layers: custom.num_hidden_layers,
-            num_attention_heads: custom.num_attention_heads,
-            num_key_value_heads: custom.num_key_value_heads,
-            intermediate_size: custom.intermediate_size,
-            rope_theta: custom.rope_theta,
-            rms_norm_eps: custom.rms_norm_eps,
-            max_position_embeddings: custom.max_position_embeddings,
-            bos_token_id: Some(0),
-            eos_token_id: Some(LlamaEosToks::Single(2)),
-            use_flash_attn: false,
+impl SmolLM3Config {
+    /// Create SmolLM3-3B configuration
+    pub fn smollm3_3b() -> Self {
+        let base = candle_transformers::models::quantized_llama::Config {
+            hidden_size: 3072,
+            intermediate_size: 8192,
+            vocab_size: 128256,
+            num_hidden_layers: 36,
+            num_attention_heads: 32,
+            num_key_value_heads: 8, // GQA with 4:1 ratio
+            rms_norm_eps: 1e-5,
+            rope_theta: 1000000.0, // Extended context RoPE
+            use_flash_attn: false, // Not yet supported in Candle
+            head_dim: 96, // 3072 / 32
             tie_word_embeddings: false,
             rope_scaling: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SmolLM3Config {
-    /// Base config that can be serialized
-    pub base: CustomLlamaConfig,
-    
-    /// SmolLM3-specific features (kept separate)
-    pub nope_layers: Vec<usize>,
-    pub thinking_tokens: ThinkingTokens,
-    pub reasoning_mode: ReasoningMode,
-    pub tool_calling: ToolCallingConfig,
-    
-    // Model behavior settings that aren't in LlamaConfig
-    pub activation: ActivationType,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ActivationType {
-    Silu,
-    Gelu,
-    Relu,
-}
-
-impl Default for ActivationType {
-    fn default() -> Self {
-        Self::Silu
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThinkingTokens {
-    pub start: u32,
-    pub end: u32,
-}
-
-impl Default for ThinkingTokens {
-    fn default() -> Self {
+            max_position_embeddings: 131072,
+        };
+        
+        // NoPE layers: indices 3, 7, 11, 15, 19, 23, 27, 31, 35
+        let nope_layer_indices = (0..36).filter(|i| i % 4 == 3).collect();
+        
         Self {
-            start: 128002,
-            end: 128003,
+            base,
+            enable_thinking: true,
+            think_token_id: 128002,
+            think_end_token_id: 128003,
+            nope_layer_indices,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum ReasoningMode {
-    Think,
-    NoThink,
-    Adaptive,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallingConfig {
-    pub enabled: bool,
-    pub format: ToolFormat,
-    pub available_tools: Vec<String>,
-}
-
-impl Default for ToolCallingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            format: ToolFormat::XML,
-            available_tools: Vec::new(),
-        }
+    
+    /// Create config from GGUF metadata
+    pub fn from_gguf(content: &Content) -> Result<Self> {
+        use super::gguf_loader::{get_metadata_u32, get_metadata_f32};
+        
+        let hidden_size = get_metadata_u32(content, &["llama.embedding_length", "hidden_size"])
+            .unwrap_or(3072) as usize;
+        let intermediate_size = get_metadata_u32(content, &["llama.feed_forward_length", "intermediate_size"])
+            .unwrap_or(8192) as usize;
+        let vocab_size = get_metadata_u32(content, &["llama.vocab_size", "vocab_size"])
+            .unwrap_or(128256) as usize;
+        let num_hidden_layers = get_metadata_u32(content, &["llama.block_count", "n_layer"])
+            .unwrap_or(36) as usize;
+        let num_attention_heads = get_metadata_u32(content, &["llama.attention.head_count", "n_head"])
+            .unwrap_or(32) as usize;
+        let num_key_value_heads = get_metadata_u32(content, &["llama.attention.head_count_kv", "n_kv_head"])
+            .unwrap_or(8) as usize;
+        let rms_norm_eps = get_metadata_f32(content, &["llama.attention.layer_norm_rms_epsilon", "rms_norm_eps"])
+            .unwrap_or(1e-5) as f64;
+        let rope_theta = get_metadata_f32(content, &["llama.rope.freq_base", "rope_theta"])
+            .unwrap_or(1000000.0) as f32;
+        
+        let base = candle_transformers::models::quantized_llama::Config {
+            hidden_size,
+            intermediate_size,
+            vocab_size,
+            num_hidden_layers,
+            num_attention_heads,
+            num_key_value_heads,
+            rms_norm_eps,
+            rope_theta,
+            use_flash_attn: false,
+            head_dim: hidden_size / num_attention_heads,
+            tie_word_embeddings: false,
+            rope_scaling: None,
+            max_position_embeddings: 131072,
+        };
+        
+        // NoPE layers for SmolLM3
+        let nope_layer_indices = (0..num_hidden_layers).filter(|i| i % 4 == 3).collect();
+        
+        Ok(Self {
+            base,
+            enable_thinking: true,
+            think_token_id: 128002,
+            think_end_token_id: 128003,
+            nope_layer_indices,
+        })
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum ToolFormat {
-    XML,
-    Python,
-    JSON,
 }
 
 impl Default for SmolLM3Config {
     fn default() -> Self {
-        let base = CustomLlamaConfig {
-            vocab_size: 128256,
-            hidden_size: 2048,
-            num_hidden_layers: 36,
-            num_attention_heads: 16,
-            num_key_value_heads: 4,
-            intermediate_size: 11008,
-            rope_theta: 2000000.0,
-            rms_norm_eps: 1e-5,
-            max_position_embeddings: 65536,
-        };
-        
-        Self {
-            base,
-            nope_layers: vec![3, 7, 11, 15, 19, 23, 27, 31, 35],
-            thinking_tokens: ThinkingTokens::default(),
-            reasoning_mode: ReasoningMode::Think,
-            tool_calling: ToolCallingConfig::default(),
-            activation: ActivationType::default(),
-        }
-    }
-}
-
-impl SmolLM3Config {
-    pub fn to_llama_config(&self) -> LlamaConfig {
-        self.base.clone().into()
-    }
-    
-    pub fn is_nope_layer(&self, layer_idx: usize) -> bool {
-        self.nope_layers.contains(&layer_idx)
+        Self::smollm3_3b()
     }
 }

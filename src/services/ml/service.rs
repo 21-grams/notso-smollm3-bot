@@ -1,129 +1,258 @@
-//! High-level ML service orchestrating all components
+//! ML Service that orchestrates SmolLM3 model with proper Llama integration
 
-use super::official::{SmolLM3Config};
-use crate::types::events::StreamEvent;
-use candle_core::Device;
-use tokenizers::Tokenizer;
-use tokio::sync::mpsc::UnboundedSender;
-use std::sync::Arc;
-use anyhow::Result;
+use candle_core::{Device, Result, Tensor};
+use candle_transformers::generation::LogitsProcessor;
+use std::path::Path;
 
+use crate::smollm3::{
+    SmolLM3Tokenizer,
+    SmolLM3KVCache,
+};
+use super::official::model::SmolLM3Model;
+
+/// Main ML service for SmolLM3 inference
 pub struct MLService {
-    config: SmolLM3Config,
+    /// The SmolLM3 model wrapping quantized Llama
+    model: SmolLM3Model,
+    /// Tokenizer with thinking mode support
+    tokenizer: SmolLM3Tokenizer,
+    /// KV cache for efficient generation
+    kv_cache: SmolLM3KVCache,
+    /// Device for tensor operations
     device: Device,
-    tokenizer: Option<Arc<Tokenizer>>,
-    is_stub: bool,
+    /// Logits processor for sampling
+    logits_processor: LogitsProcessor,
 }
 
 impl MLService {
-    /// Create a stub ML service for testing without models
-    pub async fn new_stub() -> Result<Self> {
-        tracing::info!("🔌 Creating stub ML service (no model loaded)");
+    /// Create a new ML service
+    pub fn new<P: AsRef<Path>>(
+        model_path: P,
+        tokenizer_path: P,
+        template_path: P,
+        device: Device,
+    ) -> Result<Self> {
+        tracing::info!("🚀 Initializing SmolLM3 ML Service");
         
-        let config = SmolLM3Config::default();
-        let device = Device::Cpu;
+        // Load model using our SmolLM3 wrapper
+        let model = SmolLM3Model::from_gguf(model_path, &device)?;
+        let config = model.config().clone();
+        
+        // Initialize tokenizer
+        let tokenizer = SmolLM3Tokenizer::new(
+            tokenizer_path.as_ref().to_str().unwrap(),
+            template_path.as_ref().to_str().unwrap(),
+        ).map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
+        
+        // Initialize KV cache for all layers
+        let kv_cache = SmolLM3KVCache::new(
+            config.base.num_hidden_layers,
+            65536, // Max context length
+            device.clone(),
+        );
+        
+        // Setup logits processor for sampling
+        let logits_processor = LogitsProcessor::new(
+            42,           // seed
+            Some(0.9),    // temperature
+            Some(0.95),   // top_p
+        );
+        
+        tracing::info!("✅ ML Service initialized successfully");
         
         Ok(Self {
-            config,
+            model,
+            tokenizer,
+            kv_cache,
             device,
-            tokenizer: None,
-            is_stub: true,
+            logits_processor,
         })
     }
     
-    /// Initialize ML service with official foundation
-    pub async fn new(model_path: &str, tokenizer_path: &str) -> Result<Self> {
-        tracing::info!("🚀 Initializing ML service with SmolLM3");
-        
-        // 1. Device detection
-        let device = super::official::DeviceManager::detect_optimal_device()?;
-        tracing::info!("🎮 Using device: {}", super::official::DeviceManager::device_info(&device));
-        
-        // 2. Check if model files exist
-        if !std::path::Path::new(model_path).exists() {
-            return Err(anyhow::anyhow!("Model file not found: {}", model_path));
-        }
-        
-        if !std::path::Path::new(tokenizer_path).exists() {
-            return Err(anyhow::anyhow!("Tokenizer file not found: {}", tokenizer_path));
-        }
-        
-        // 3. Try to inspect GGUF metadata
-        let inspection = super::official::inspect_gguf(model_path)?;
-        inspection.print_report();
-        
-        if !inspection.has_llama_metadata {
-            tracing::warn!("⚠️ Missing Llama metadata. The GGUF file may need conversion.");
-            return Err(anyhow::anyhow!(
-                "GGUF file missing required metadata. Model needs proper conversion for SmolLM3."
-            ));
-        }
-        
-        // 5. Load tokenizer
-        let tokenizer = Tokenizer::from_file(tokenizer_path)
-            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
-        let tokenizer = Arc::new(tokenizer);
-        
-        // 6. For now, return stub mode since full model loading needs more work
-        tracing::warn!("⚠️ Full model loading not yet implemented. Using stub mode.");
-        
-        Ok(Self {
-            config: SmolLM3Config::default(),
-            device,
-            tokenizer: Some(tokenizer),
-            is_stub: true,
-        })
-    }
-    
-    /// Generate response for a session (high-level API for handlers)
-    pub async fn generate_response(
-        &self,
-        session_id: &str,
-        message: &str,
-    ) -> anyhow::Result<()> {
-        tracing::info!("Generating response for session: {}", session_id);
-        tracing::info!("Message: {}", message);
-        
-        if self.is_stub {
-            tracing::info!("Running in stub mode - no actual generation");
-        }
-        
-        Ok(())
-    }
-    
-    /// Generate response with streaming
-    pub async fn generate_stream(
-        &self,
+    /// Generate text from a prompt
+    pub fn generate(
+        &mut self,
         prompt: &str,
-        sender: UnboundedSender<StreamEvent>,
-    ) -> Result<String> {
-        if self.is_stub {
-            // Stub mode - send mock events with more realistic responses
-            let _ = sender.send(StreamEvent::thinking("Processing your message...".to_string()));
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        max_tokens: usize,
+        enable_thinking: bool,
+    ) -> Result<Vec<String>> {
+        tracing::info!("🔄 Starting generation with max_tokens={}", max_tokens);
+        
+        // Encode the prompt
+        let tokens = self.tokenizer.encode(prompt)
+            .map_err(|e| candle_core::Error::Msg(format!("Encoding error: {}", e)))?;
+        
+        let mut all_tokens = tokens.clone();
+        let mut output_tokens = Vec::new();
+        let mut in_thinking_mode = false;
+        
+        // Convert to tensor
+        let mut input_ids = Tensor::new(tokens.as_slice(), &self.device)?
+            .unsqueeze(0)?; // Add batch dimension
+        
+        // Generation loop
+        for _step in 0..max_tokens {
+            // Forward pass through model
+            let logits = self.forward_with_cache(&input_ids)?;
             
-            // Generate a contextual stub response based on the prompt
-            let response = if prompt.to_lowercase().contains("hello") || prompt.to_lowercase().contains("hi") {
-                "Hello! I'm SmolLM3 running in stub mode. The actual model is not loaded yet, but I'm here to help test the chat interface."
-            } else if prompt.to_lowercase().contains("how are you") {
-                "I'm functioning well in stub mode! The chat interface is working, though I'm not using the actual SmolLM3 model yet."
-            } else if prompt.to_lowercase().contains("help") {
-                "I'm currently running in stub mode, which means the real SmolLM3 model isn't loaded. This mode is useful for testing the chat interface and streaming functionality."
-            } else {
-                "I received your message, but I'm running in stub mode without the actual SmolLM3 model loaded. This is a test response to verify the streaming system works correctly."
-            };
+            // Get the last token's logits
+            let last_logits = logits.i((0, logits.dim(1)? - 1, ..))?;
             
-            // Stream the response word by word
-            for word in response.split_whitespace() {
-                let _ = sender.send(StreamEvent::token(format!("{} ", word)));
-                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+            // Sample next token
+            let next_token = self.logits_processor.sample(&last_logits)?;
+            
+            // Get config for special tokens
+            let config = self.model.config();
+            
+            // Handle special tokens
+            if next_token == config.think_token_id {
+                in_thinking_mode = true;
+                if enable_thinking {
+                    output_tokens.push("<thinking>".to_string());
+                }
+                all_tokens.push(next_token);
+                continue;
+            } else if next_token == config.think_end_token_id {
+                in_thinking_mode = false;
+                if enable_thinking {
+                    output_tokens.push("</thinking>".to_string());
+                }
+                all_tokens.push(next_token);
+                continue;
             }
             
-            let _ = sender.send(StreamEvent::complete());
-            return Ok(response.to_string());
+            // Check for EOS token
+            if next_token == 128001 { // EOS token
+                tracing::info!("🛑 EOS token detected, stopping generation");
+                break;
+            }
+            
+            // Decode and add to output
+            let token_text = self.tokenizer.decode(&[next_token])
+                .map_err(|e| candle_core::Error::Msg(format!("Decoding error: {}", e)))?;
+            
+            if !in_thinking_mode || enable_thinking {
+                output_tokens.push(token_text);
+            }
+            
+            all_tokens.push(next_token);
+            
+            // Update input for next iteration
+            input_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
         }
         
-        // Real generation would go here when model is properly loaded
-        Err(anyhow::anyhow!("Real model generation not yet implemented"))
+        // Reset cache for next generation
+        self.kv_cache.reset();
+        
+        tracing::info!("✅ Generated {} tokens", output_tokens.len());
+        Ok(output_tokens)
+    }
+    
+    /// Forward pass with KV caching
+    fn forward_with_cache(&mut self, input_ids: &Tensor) -> Result<Tensor> {
+        // For now, use the model's forward method
+        // In a full implementation, this would handle:
+        // 1. KV cache management per layer
+        // 2. NoPE layer special handling
+        // 3. GQA attention with proper head expansion
+        
+        self.model.forward(input_ids, None, Some(&mut self.kv_cache))
+    }
+    
+    /// Apply chat template to messages
+    pub fn apply_chat_template(
+        &self,
+        messages: Vec<serde_json::Value>,
+        enable_thinking: bool,
+    ) -> std::result::Result<String, Box<dyn std::error::Error>> {
+        self.tokenizer.apply_chat_template(messages, enable_thinking)
+    }
+    
+    /// Get tokenizer reference
+    pub fn tokenizer(&self) -> &SmolLM3Tokenizer {
+        &self.tokenizer
+    }
+}
+
+/// Builder pattern for MLService configuration
+pub struct MLServiceBuilder {
+    model_path: Option<String>,
+    tokenizer_path: Option<String>,
+    template_path: Option<String>,
+    device: Option<Device>,
+    temperature: f64,
+    top_p: Option<f64>,
+    seed: u64,
+}
+
+impl Default for MLServiceBuilder {
+    fn default() -> Self {
+        Self {
+            model_path: None,
+            tokenizer_path: None,
+            template_path: None,
+            device: None,
+            temperature: 0.9,
+            top_p: Some(0.95),
+            seed: 42,
+        }
+    }
+}
+
+impl MLServiceBuilder {
+    /// Set model path
+    pub fn model_path<P: AsRef<Path>>(mut self, path: P) -> Self {
+        self.model_path = Some(path.as_ref().to_string_lossy().to_string());
+        self
+    }
+    
+    /// Set tokenizer path
+    pub fn tokenizer_path<P: AsRef<Path>>(mut self, path: P) -> Self {
+        self.tokenizer_path = Some(path.as_ref().to_string_lossy().to_string());
+        self
+    }
+    
+    /// Set template path
+    pub fn template_path<P: AsRef<Path>>(mut self, path: P) -> Self {
+        self.template_path = Some(path.as_ref().to_string_lossy().to_string());
+        self
+    }
+    
+    /// Set device
+    pub fn device(mut self, device: Device) -> Self {
+        self.device = Some(device);
+        self
+    }
+    
+    /// Set temperature
+    pub fn temperature(mut self, temp: f64) -> Self {
+        self.temperature = temp;
+        self
+    }
+    
+    /// Set top_p
+    pub fn top_p(mut self, top_p: f64) -> Self {
+        self.top_p = Some(top_p);
+        self
+    }
+    
+    /// Set seed
+    pub fn seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+    
+    /// Build the MLService
+    pub fn build(self) -> Result<MLService> {
+        let model_path = self.model_path
+            .ok_or_else(|| candle_core::Error::Msg("Model path required".to_string()))?;
+        let tokenizer_path = self.tokenizer_path
+            .ok_or_else(|| candle_core::Error::Msg("Tokenizer path required".to_string()))?;
+        let template_path = self.template_path
+            .ok_or_else(|| candle_core::Error::Msg("Template path required".to_string()))?;
+        let device = self.device
+            .unwrap_or_else(|| Device::cuda_if_available(0).unwrap_or(Device::Cpu));
+        
+        MLService::new(model_path, tokenizer_path, template_path, device)
     }
 }

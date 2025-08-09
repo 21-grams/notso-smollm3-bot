@@ -1,3 +1,10 @@
+# ============================================================================
+# IMPORTANT: DO NOT CHANGE EXISTING DEPENDENCY VERSIONS
+# These versions have been carefully selected for compatibility with the
+# latest Candle.rs ecosystem (0.9.1+) and are required for SmolLM3 support.
+# Only adding new dependencies or new features to existing ones is allowed.
+# ============================================================================
+
 [package]
 name = "notso-smollm3-bot"
 version = "0.2.0"
@@ -8,21 +15,22 @@ name = "notso-smollm3-bot"
 path = "src/main.rs"
 
 [dependencies]
-# Core ML - Official Candle
+# Core ML - Official Candle (v0.9.1 - DO NOT DOWNGRADE)
 candle-core = { version = "0.9", default-features = false }
 candle-nn = { version = "0.9", default-features = false }
 candle-transformers = { version = "0.9", default-features = false }
-tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 
-# Web Framework - Axum 0.8
+# Web Framework - Axum 0.8 (BREAKING CHANGES FROM 0.7)
+# Note: Path syntax changed from /:param to /{param}
 axum = { version = "0.8", features = ["macros"] }
-axum-extra = { version = "0.9", features = ["typed-header"] }
+axum-extra = { version = "0.10", features = ["typed-header"] }
 tokio = { version = "1.42", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"] }
 
-# Template Engine
-minijinja = { version = "2.3", features = ["loader"] }
+# Template Engine (v2.11+ required for performance)
+minijinja = { version = "2.11", features = ["loader"] }
 
 # SSE & Async
 futures = "0.3"
@@ -46,8 +54,8 @@ hf-hub = { version = "0.3", features = ["tokio"], optional = true }
 
 [features]
 default = []
-cuda = ["candle-core/cuda"]
-metal = ["candle-core/metal"] 
+cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda"]
+metal = ["candle-core/metal", "candle-nn/metal", "candle-transformers/metal"] 
 download = ["hf-hub"]
 
 [profile.release]

@@ -1,15 +1,13 @@
-//! Official Candle foundation components
+pub mod config;
+pub mod device;
+pub mod gguf_loader;
+pub mod loader;
+pub mod model;
+pub mod quantized_model;
+pub mod llama_forward;
 
-mod model;
-mod config;
-mod loader;
-mod device;
-mod gguf_loader;
-mod quantized_model;
-
-pub use model::OfficialSmolLM3Model;
-pub use config::{SmolLM3Config, ThinkingTokens, ReasoningMode, ToolCallingConfig};
+pub use config::SmolLM3Config;
+pub use device::get_device;
+pub use gguf_loader::{load_smollm3_gguf, inspect_gguf};
 pub use loader::OfficialLoader;
-pub use device::DeviceManager;
-pub use gguf_loader::{SmolLM3GgufLoader, try_load_as_quantized_llama, inspect_gguf, GgufInspectionReport};
-pub use quantized_model::QuantizedSmolLM3;
+pub use model::{SmolLM3Model, OfficialSmolLM3Model};

@@ -1,4 +1,4 @@
-//! Simple quantized model implementation for SmolLM3
+//! Simple quantized model implementation for SmolLM3 with Candle v0.9.1
 
 use candle_core::quantized::QTensor;
 use candle_core::{Device, Result, Tensor};
@@ -109,7 +109,7 @@ impl QuantizedSmolLM3 {
         let down_proj = self.get_tensor(&format!("{}.mlp.down_proj.weight", layer_prefix))?;
         
         let gate_output = normed.matmul(&gate_proj.t()?)?;
-        let gate_output = self.silu(&gate_output)?;
+        let gate_output = gate_output.silu()?; // Use built-in silu in Candle 0.9.1
         let up_output = normed.matmul(&up_proj.t()?)?;
         let mlp_output = (gate_output * up_output)?;
         let mlp_output = mlp_output.matmul(&down_proj.t()?)?;
@@ -132,13 +132,6 @@ impl QuantizedSmolLM3 {
         let mean = x2.mean_keepdim(2)?;
         let rrms = (mean + eps)?.recip()?.sqrt()?;
         Ok((x * rrms)?.broadcast_mul(weight)?)
-    }
-    
-    /// SiLU activation
-    fn silu(&self, x: &Tensor) -> Result<Tensor> {
-        // SiLU(x) = x * sigmoid(x)
-        let sigmoid = (x.neg()?.exp()? + 1.0)?.recip()?;
-        Ok((x * sigmoid)?)
     }
     
     /// Sample next token from logits

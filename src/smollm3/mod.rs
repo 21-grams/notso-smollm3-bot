@@ -1,10 +1,15 @@
 pub mod chat_template;
 pub mod config;
-pub mod features;
 pub mod model;
-pub mod thinking;
 pub mod tokenizer;
-pub mod tool_use;
 
-pub use model::SmolLM3Model;
+// Re-export main types
+pub use tokenizer::SmolLM3Tokenizer;
 pub use config::SmolLM3Config;
+pub use model::SmolLM3Model;
+
+// Re-export from services/ml/smollm3 
+pub use crate::services::ml::smollm3::{
+    SmolLM3KVCache,
+    KVCache,
+};

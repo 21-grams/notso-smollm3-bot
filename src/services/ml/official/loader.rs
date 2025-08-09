@@ -1,4 +1,4 @@
-//! Official GGUF loading using Candle patterns
+//! Official GGUF loading using Candle patterns with v0.9.1 compatibility
 
 use candle_transformers::models::quantized_llama::ModelWeights;
 use candle_core::quantized::gguf_file;
@@ -8,12 +8,12 @@ use std::path::Path;
 pub struct OfficialLoader;
 
 impl OfficialLoader {
-    /// Load GGUF using official Candle patterns
+    /// Load GGUF using official Candle patterns (v0.9.1)
     pub async fn load_gguf<P: AsRef<Path>>(
         path: P,
         device: &Device,
     ) -> Result<ModelWeights> {
-        tracing::info!("🚀 Loading GGUF with official Candle patterns");
+        tracing::info!("🚀 Loading GGUF with official Candle v0.9.1 patterns");
         
         let mut file = std::fs::File::open(path)?;
         let content = gguf_file::Content::read(&mut file)?;
@@ -22,7 +22,14 @@ impl OfficialLoader {
                       content.tensor_infos.len(),
                       content.metadata.len());
         
-        let weights = ModelWeights::from_gguf(content, &mut file, device)?;
+        // Apply metadata mapping for SmolLM3 compatibility
+        let mut mapped_content = content;
+        super::gguf_loader::map_smollm3_to_llama_metadata(&mut mapped_content);
+        
+        // Reset file position for weight loading
+        file = std::fs::File::open(path.as_ref())?;
+        
+        let weights = ModelWeights::from_gguf(mapped_content, &mut file, device)?;
         
         tracing::info!("✅ Official model weights loaded successfully");
         Ok(weights)
