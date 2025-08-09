@@ -95,12 +95,13 @@ pub async fn stream_session(
             tracing::debug!("Processing SSE event: {:?}", event);
             let sse_event = match event {
                 StreamEvent::MessageContent { message_id, content } => {
+                    // Send raw text/markdown - NO HTML escaping
                     Event::default()
                         .event("message")
                         .data(format!(
                             "{}|{}",
                             message_id,
-                            html_escape::encode_text(&content)
+                            content  // Raw content, no escaping
                         ))
                 }
                 StreamEvent::MessageComplete { message_id } => {
@@ -112,7 +113,7 @@ pub async fn stream_session(
                     Event::default()
                         .event("message-error")
                         .data(format!(
-                            r#"<div hx-target='#msg-{}' hx-swap='innerHTML'><div class='error-message'>{}</div></div>"#,
+                            "{}|{}",
                             message_id, error
                         ))
                 }
@@ -238,8 +239,11 @@ async fn generate_response_buffered(
         Some(service) => {
             // Try to use the model
             if let Err(e) = service.generate_streaming(&message, &mut buffer).await {
-                // Model failed, stream error message
-                let error_msg = format!("Model generation failed: {}. Fallback to FTS5 search (TODO).", e);
+                // Model failed, stream fallback message with markdown
+                let error_msg = format!("⚠️ **Model generation failed**\n\n\
+                                        Error: {}\n\n\
+                                        Searching cached conversations with FTS5...\n\n\
+                                        *(FTS5 search integration pending)*", e);
                 for word in error_msg.split_whitespace() {
                     buffer.push(&format!("{} ", word)).await?;
                     tokio::time::sleep(Duration::from_millis(30)).await;
@@ -247,8 +251,11 @@ async fn generate_response_buffered(
             }
         }
         None => {
-            // No model loaded, stream fallback message  
-            let fallback = "Model not loaded. Using FTS5 search on cached conversations. (This is a placeholder - FTS5 integration coming soon)";
+            // No model loaded, stream fallback message with markdown
+            let fallback = "🔴 **Model not loaded**\n\n\
+                           Using FTS5 search on cached conversations.\n\n\
+                           *(This is a placeholder - FTS5 integration coming soon)*\n\n\
+                           You can still use slash commands like `/quote` or `/status`.";
             for word in fallback.split_whitespace() {
                 buffer.push(&format!("{} ", word)).await?;
                 tokio::time::sleep(Duration::from_millis(30)).await;
