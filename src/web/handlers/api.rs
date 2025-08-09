@@ -28,7 +28,7 @@ pub struct ChatResponse {
     html: String,
 }
 
-/// Handle chat message submission (optimized for persistent SSE)
+/// Handle chat message submission with HTMX SSE targeting
 pub async fn send_message(
     State(state): State<AppState>,
     Form(msg): Form<ChatMessage>,
@@ -36,20 +36,22 @@ pub async fn send_message(
     let message_id = Uuid::now_v7().to_string();
     tracing::info!("Received message: '{}' for session: {}", msg.message, msg.session_id);
     
-    // Return HTML with proper structure for SSE streaming
+    // Create bubble with SSE swap attribute for message-specific events
     let html = format!(
         r#"<div class="message user">
             <div class="message-bubble">{}</div>
         </div>
-        <div class="message assistant" id="msg-{}">
-            <div class="message-bubble">
-                <span class="loading">Thinking...</span>
-                <div id="msg-{}-content" style="display:inline;"></div>
+        <div class="message assistant">
+            <div class="message-bubble" 
+                 id="msg-{}-bubble"
+                 sse-swap="msg-{}"
+                 hx-swap="beforeend">
+                <span class="thinking">Thinking...</span>
             </div>
         </div>"#,
         html_escape::encode_text(&msg.message),
         message_id,
-        message_id
+        message_id  // Use message ID as the SSE event name
     );
     
     // Clone values for the spawned task
@@ -111,31 +113,25 @@ pub async fn stream_session(
             let sse_event = match event {
                 StreamEvent::MessageContent { message_id, content } => {
                     tracing::info!("Streaming content for message: {}", message_id);
-                    // Send HTML with OOB swap to append to specific message content div
+                    // Send raw content with message-specific event name
+                    // The bubble with sse-swap="msg-{id}" will receive this
                     Event::default()
-                        .event("message")
-                        .data(format!(
-                            r#"<span hx-swap-oob="beforeend:#msg-{}-content">{}</span>"#,
-                            message_id,
-                            html_escape::encode_text(&content)
-                        ))
+                        .event(format!("msg-{}", message_id))
+                        .data(content)  // Just raw markdown text, no wrapping
                 }
                 StreamEvent::MessageComplete { message_id } => {
                     tracing::info!("Message complete for: {}", message_id);
-                    // Send a simple complete event with just the message ID
+                    // Send complete event with just the message ID
                     Event::default()
                         .event("complete")
                         .data(message_id)
                 }
                 StreamEvent::MessageError { message_id, error } => {
-                    tracing::info!("Formatting error event with OOB swap: {}", message_id);
+                    tracing::info!("Sending error for message: {}", message_id);
+                    // Send error with message-specific event
                     Event::default()
-                        .event("message-error")
-                        .data(format!(
-                            r#"<div id="msg-{}-content" hx-swap-oob="innerHTML"><div class="error-message">Error: {}</div></div>"#,
-                            message_id, 
-                            html_escape::encode_text(&error)
-                        ))
+                        .event(format!("msg-{}", message_id))
+                        .data(format!("\n\n**Error:** {}", error))
                 }
                 // Legacy events for compatibility
                 StreamEvent::Content(text) => {
@@ -220,15 +216,24 @@ async fn stream_quote_buffered(
 
 **14** And the Word became flesh and tabernacled among us (and we beheld His glory, glory as of the only Begotten from the Father), full of grace and reality."#;
     
-    // Split into words for token-like streaming
-    let words: Vec<&str> = scripture_text.split_whitespace().collect();
+    // Split into chunks preserving line breaks
+    // We'll stream word by word but preserve newlines
+    let lines = scripture_text.lines();
     
-    // Push words through buffer
-    for word in words {
-        buffer.push(&format!("{} ", word)).await?;
-        
-        // Small delay to simulate generation
-        tokio::time::sleep(Duration::from_millis(20)).await;
+    for line in lines {
+        // Stream each word in the line
+        let words: Vec<&str> = line.split_whitespace().collect();
+        for (i, word) in words.iter().enumerate() {
+            buffer.push(word).await?;
+            // Add space after word unless it's the last word in the line
+            if i < words.len() - 1 {
+                buffer.push(" ").await?;
+            }
+            // Small delay to simulate generation
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Add newline at end of line
+        buffer.push("\n").await?;
     }
     
     // Signal completion
