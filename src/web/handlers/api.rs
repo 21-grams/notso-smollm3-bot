@@ -79,7 +79,7 @@ pub async fn stream_session(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    tracing::info!("SSE connection request for session: {}", session_id);
+    tracing::info!("SSE connection established for session: {}", session_id);
     
     // Ensure session exists and subscribe to its broadcast channel
     let receiver = {
@@ -106,6 +106,7 @@ pub async fn stream_session(
         .map(|event| {
             let sse_event = match event {
                 StreamEvent::MessageContent { message_id, content } => {
+                    tracing::info!("Formatting message event: {}|{}", message_id, content);
                     // Send raw text/markdown - NO HTML escaping
                     Event::default()
                         .event("message")
@@ -116,11 +117,13 @@ pub async fn stream_session(
                         ))
                 }
                 StreamEvent::MessageComplete { message_id } => {
+                    tracing::info!("Formatting complete event: {}", message_id);
                     Event::default()
                         .event("complete")
                         .data(message_id)
                 }
                 StreamEvent::MessageError { message_id, error } => {
+                    tracing::info!("Formatting error event: {}|{}", message_id, error);
                     Event::default()
                         .event("message-error")
                         .data(format!(
