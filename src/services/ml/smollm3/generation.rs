@@ -6,7 +6,7 @@ use crate::services::streaming::StreamingBuffer;
 use candle_transformers::generation::LogitsProcessor;
 use candle_core::{Tensor, Device, Result};
 use tokenizers::Tokenizer;
-use tokio::sync::mpsc::{UnboundedSender, Sender};
+use tokio::sync::mpsc::UnboundedSender;
 use super::thinking::ThinkingDetector;
 use super::kv_cache::KVCache;
 use std::sync::Arc;
@@ -99,16 +99,17 @@ impl SmolLM3Generator {
         let input_ids = encoding.get_ids().to_vec();
         
         // 2. Generation loop with streaming
-        let mut tokens = input_ids.clone();
-        let mut accumulated_text = String::new();
+        let tokens = input_ids.clone();
+        let accumulated_text = String::new();
         
         for step in 0..max_tokens {
             // Create input tensor
-            let input_tensor = self.create_input_tensor(&tokens, step)?;
+            let _input_tensor = self.create_input_tensor(&tokens, step)?;
             
             // Forward pass with mutex lock
+            #[allow(unused_variables)]
             let logits = {
-                let model_arc = self.model.lock().await;
+                let _model_arc = self.model.lock().await;
                 // We need to call forward on the model inside the Arc
                 // This is a limitation - we can't mutate through Arc
                 // For now, return an error to indicate this needs refactoring
@@ -116,6 +117,7 @@ impl SmolLM3Generator {
             };
             
             // Sample next token
+            #[allow(unreachable_code)]
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             
@@ -142,7 +144,8 @@ impl SmolLM3Generator {
             // Buffer token if not in thinking mode
             if !self.thinking_detector.is_thinking() {
                 accumulated_text.push_str(&token_text);
-                buffer.push(&token_text).await?;
+                buffer.push(&token_text).await
+                    .map_err(|e| anyhow::anyhow!("Buffer push error: {}", e))?;
             }
             
             // Check stop conditions
@@ -151,7 +154,8 @@ impl SmolLM3Generator {
             }
         }
         
-        buffer.complete().await?;
+        buffer.complete().await
+            .map_err(|e| anyhow::anyhow!("Buffer complete error: {}", e))?;
         Ok(accumulated_text)
     }
     
@@ -168,16 +172,17 @@ impl SmolLM3Generator {
         let input_ids = encoding.get_ids().to_vec();
         
         // 2. Generation loop with streaming
-        let mut tokens = input_ids.clone();
-        let mut accumulated_text = String::new();
+        let tokens = input_ids.clone();
+        let accumulated_text = String::new();
         
         for step in 0..max_tokens {
             // Create input tensor
-            let input_tensor = self.create_input_tensor(&tokens, step)?;
+            let _input_tensor = self.create_input_tensor(&tokens, step)?;
             
             // Forward pass with mutex lock
+            #[allow(unused_variables)]
             let logits = {
-                let model_arc = self.model.lock().await;
+                let _model_arc = self.model.lock().await;
                 // We need to call forward on the model inside the Arc
                 // This is a limitation - we can't mutate through Arc
                 // For now, return an error to indicate this needs refactoring
@@ -185,6 +190,7 @@ impl SmolLM3Generator {
             };
             
             // Sample next token
+            #[allow(unreachable_code)]
             let next_token = self.logits_processor.sample(&logits)?;
             tokens.push(next_token);
             

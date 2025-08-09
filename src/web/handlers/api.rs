@@ -1,13 +1,13 @@
 //! API endpoint handlers
 
 use crate::state::AppState;
-use crate::services::template::ChatTemplateService;
+// use crate::services::template::ChatTemplateService; // Currently unused
 use crate::services::streaming::StreamingBuffer;
 use crate::types::events::StreamEvent;
 use axum::{
     extract::{State, Path, Form},
     response::{Html, sse::{Event, Sse, KeepAlive}},
-    http::StatusCode,
+    // http::StatusCode, // Currently unused
 };
 use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub async fn send_message(
     State(state): State<AppState>,
     Form(msg): Form<ChatMessage>,
 ) -> Html<String> {
-    let message_id = Uuid::new_v4().to_string();
+    let message_id = Uuid::now_v7().to_string();
     
     // Return HTML without SSE connection (using existing persistent connection)
     let html = format!(
@@ -80,8 +80,8 @@ pub async fn send_message(
     Html(html)
 }
 
-/// Stream events for a session using the unified buffer
-pub async fn stream_events(
+/// Implement persistent SSE endpoint
+pub async fn stream_session(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
@@ -139,7 +139,7 @@ async fn stream_quote_buffered(
     };
     
     // Create streaming buffer
-    let mut buffer = StreamingBuffer::new(session_id.clone(), sender);
+    let mut buffer = StreamingBuffer::new(sender, session_id.clone());
     
     // The Gospel of John 1:1-14 text
     let scripture_text = r#"# Gospel of John 1:1-14
@@ -203,7 +203,7 @@ async fn generate_response_buffered(
     };
     
     // Create streaming buffer
-    let mut buffer = StreamingBuffer::new(session_id.clone(), sender);
+    let mut buffer = StreamingBuffer::new(sender, session_id.clone());
     
     // For now, just echo back with a simple response
     let response = format!("I received your message: '{}'. This is a stub response while the model is being integrated.", message);
@@ -224,7 +224,7 @@ async fn generate_response_buffered(
 
 /// Toggle thinking mode
 pub async fn toggle_thinking(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> Html<String> {
     // This would update the session's thinking mode
     // For now, just return status

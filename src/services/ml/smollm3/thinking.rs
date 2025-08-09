@@ -33,7 +33,7 @@ impl ThinkingDetector {
             Some(ThinkingEvent::Start)
         } else if token_id == self.tokens.end {
             self.in_thinking_mode = false;
-            let content = self.thinking_buffer.clone();
+            let _content = self.thinking_buffer.clone();
             self.thinking_buffer.clear();
             Some(ThinkingEvent::End)
         } else if self.in_thinking_mode {

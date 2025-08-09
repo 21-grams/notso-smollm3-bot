@@ -38,7 +38,7 @@ pub struct SystemStatus {
 
 /// Reset conversation context
 pub async fn reset_context(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> StatusCode {
     // Clear session context
     // In a real implementation, you'd clear the specific session
@@ -48,7 +48,7 @@ pub async fn reset_context(
 
 /// Set model temperature
 pub async fn set_temperature(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(req): Json<TemperatureRequest>,
 ) -> StatusCode {
     if req.temperature < 0.0 || req.temperature > 1.0 {
@@ -66,7 +66,7 @@ pub async fn model_info(
 ) -> JsonResponse<ModelInfo> {
     let info = ModelInfo {
         model: "SmolLM3-3B-Q4_K_M".to_string(),
-        status: if state.model.is_stub() { "Stub Mode" } else { "Active" }.to_string(),
+        status: if state.model.read().await.is_stub() { "Stub Mode" } else { "Active" }.to_string(),
         parameters: ModelParameters {
             temperature: 0.7,
             max_tokens: 2048,
@@ -85,7 +85,7 @@ pub async fn system_status(
     
     let status = SystemStatus {
         server: "Running".to_string(),
-        model: if state.model.is_stub() { "Stub Mode" } else { "SmolLM3-3B" }.to_string(),
+        model: if state.model.read().await.is_stub() { "Stub Mode" } else { "SmolLM3-3B" }.to_string(),
         sessions: sessions.count(),
         uptime: format_uptime(),
         memory_usage: get_memory_usage(),
@@ -96,7 +96,7 @@ pub async fn system_status(
 
 /// Export chat history
 pub async fn export_chat(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
 ) -> String {
     // In a real implementation, get the session ID from the request
     // and export that session's chat history

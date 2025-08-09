@@ -3,7 +3,7 @@
 
 use candle_core::{Device, Result, Tensor};
 use candle_transformers::models::quantized_llama::ModelWeights;
-use candle_core::quantized::gguf_file::Content;
+// use candle_core::quantized::gguf_file::Content; // Currently unused
 use std::path::Path;
 use std::fs::File;
 

@@ -20,7 +20,7 @@ impl NopeHandler {
     }
     
     /// Apply NoPE logic to attention scores if needed
-    pub fn process_attention(&self, layer_idx: usize, scores: &mut candle_core::Tensor) -> candle_core::Result<()> {
+    pub fn process_attention(&self, layer_idx: usize, _scores: &mut candle_core::Tensor) -> candle_core::Result<()> {
         if self.should_skip_rope(layer_idx) {
             // NoPE layers rely on content-based attention only
             // No additional processing needed here, RoPE is already skipped

@@ -3,7 +3,7 @@
 use tokenizers::Tokenizer;
 use anyhow::Result;
 use super::chat_template::{ChatTemplate, ChatMessage};
-use minijinja::Environment;
+// use minijinja::Environment; // Currently unused
 
 pub struct SmolLM3TokenizerExt {
     tokenizer: Tokenizer,

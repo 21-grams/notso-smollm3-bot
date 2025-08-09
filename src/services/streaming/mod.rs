@@ -1,7 +1,7 @@
 //! Unified streaming services
 
-mod buffer;
-mod sse_handler;
+pub mod buffer;
+pub mod sse_handler;
+// service.rs is deprecated - functionality moved to SessionManager
 
 pub use buffer::StreamingBuffer;
-pub use sse_handler::SseHandler;

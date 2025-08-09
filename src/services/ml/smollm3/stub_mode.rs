@@ -1,6 +1,7 @@
 use anyhow::Result;
 use tokio::sync::mpsc::UnboundedSender;
-use crate::services::ml::streaming::GenerationEvent;
+// Using StreamEvent instead of GenerationEvent
+use crate::types::events::StreamEvent as GenerationEvent;
 use tokio::time::{sleep, Duration};
 
 /// Stub mode service for testing without models
@@ -28,11 +29,11 @@ impl StubModeService {
         tracing::info!("🎯 Mock generation for prompt: {}", prompt);
         
         // Send start event
-        let _ = sender.send(GenerationEvent::Start);
+        let _ = sender.send(GenerationEvent::status("Starting generation".to_string()));
         
         // Mock thinking mode if enabled
         if thinking_mode {
-            let _ = sender.send(GenerationEvent::ThinkingStart);
+            let _ = sender.send(GenerationEvent::thinking("<thinking>".to_string()));
             
             let thinking_steps = vec![
                 "Analyzing the question...",
@@ -42,10 +43,10 @@ impl StubModeService {
             
             for step in thinking_steps {
                 sleep(Duration::from_millis(300)).await;
-                let _ = sender.send(GenerationEvent::ThinkingToken(step.to_string()));
+                let _ = sender.send(GenerationEvent::thinking(format!("Step {}... ", step)));
             }
             
-            let _ = sender.send(GenerationEvent::ThinkingEnd);
+            let _ = sender.send(GenerationEvent::thinking("</thinking>".to_string()));
             sleep(Duration::from_millis(200)).await;
         }
         
@@ -60,11 +61,11 @@ impl StubModeService {
         // Stream response tokens
         for word in mock_response.split_whitespace() {
             sleep(Duration::from_millis(50)).await;
-            let _ = sender.send(GenerationEvent::ResponseToken(format!("{} ", word)));
+            let _ = sender.send(GenerationEvent::token(format!("{} ", word)));
         }
         
         // Send completion
-        let _ = sender.send(GenerationEvent::Complete);
+        let _ = sender.send(GenerationEvent::complete());
         
         Ok(())
     }

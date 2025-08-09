@@ -49,7 +49,10 @@ impl SmolLM3Adapter {
             self.forward_nope_layer(input_ids, layer_idx)
         } else {
             // Standard official forward pass
-            self.model.forward(input_ids, position)
+            // Create position tensor from position value
+            let seq_len = input_ids.dim(1)?;
+            let positions = Tensor::arange(position as u32, (position + seq_len) as u32, &self.model.device())?;
+            self.model.forward(input_ids, Some(&positions), None)
         }
     }
     
@@ -57,7 +60,8 @@ impl SmolLM3Adapter {
         // For NoPE layers, we still use the standard forward but mark it for special handling
         // The actual RoPE skipping would need to be implemented at a lower level
         tracing::debug!("Processing NoPE layer {}", layer_idx);
-        self.model.forward(input_ids, layer_idx)
+        // For NoPE layers, we pass None for position_ids
+        self.model.forward(input_ids, None, None)
     }
     
     pub fn config(&self) -> &SmolLM3Config {

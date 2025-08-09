@@ -2,12 +2,26 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StreamEvent {
-    Content(String),      // For buffered content
-    Thinking(String),     // For thinking mode content
-    Token(String),        // For individual tokens (if needed)
-    Complete,             // Stream completion
-    Error(String),        // Error messages
-    Status(String),       // Status updates
+    // Message-specific events (include message_id for targeting)
+    MessageContent { message_id: String, content: String },
+    MessageThinking { message_id: String, content: String },
+    MessageComplete { message_id: String },
+    MessageError { message_id: String, error: String },
+    
+    // Session-level events
+    SessionStatus(String),
+    SessionExpired,  // Only this would use sse-close
+    
+    // System events
+    KeepAlive,
+    
+    // Legacy compatibility
+    Content(String),
+    Thinking(String),
+    Token(String),
+    Complete,
+    Error(String),
+    Status(String),
 }
 
 impl StreamEvent {
@@ -37,20 +51,14 @@ impl StreamEvent {
     
     pub fn event_type(&self) -> &str {
         match self {
-            Self::Content(_) => "message",
-            Self::Thinking(_) => "thinking",
+            Self::MessageContent { .. } | Self::Content(_) => "message",
+            Self::MessageThinking { .. } | Self::Thinking(_) => "thinking",
+            Self::MessageComplete { .. } | Self::Complete => "complete",
+            Self::MessageError { .. } | Self::Error(_) => "error",
             Self::Token(_) => "token",
-            Self::Complete => "complete",
-            Self::Error(_) => "error",
-            Self::Status(_) => "status",
-        }
-    }
-    
-    pub fn to_sse_data(&self) -> String {
-        match self {
-            Self::Content(text) | Self::Thinking(text) | Self::Token(text) | 
-            Self::Error(text) | Self::Status(text) => text.clone(),
-            Self::Complete => "done".to_string(),
+            Self::Status(_) | Self::SessionStatus(_) => "status",
+            Self::SessionExpired => "session-expired",
+            Self::KeepAlive => "keep-alive",
         }
     }
 }

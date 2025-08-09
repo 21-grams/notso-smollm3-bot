@@ -17,7 +17,7 @@ impl Session {
     pub fn new() -> Self {
         let now = Utc::now();
         Self {
-            id: Uuid::new_v4().to_string(),
+            id: Uuid::now_v7().to_string(),
             messages: Vec::new(),
             thinking_mode: false,
             created_at: now,
@@ -49,7 +49,7 @@ pub struct Message {
 impl Message {
     pub fn new_user(content: String) -> Self {
         Self {
-            id: Uuid::new_v4().to_string(),
+            id: Uuid::now_v7().to_string(),
             role: "user".to_string(),
             content,
             thinking_content: None,
@@ -60,7 +60,7 @@ impl Message {
     
     pub fn new_assistant(content: String, thinking_content: Option<String>, thinking_mode: bool) -> Self {
         Self {
-            id: Uuid::new_v4().to_string(),
+            id: Uuid::now_v7().to_string(),
             role: "assistant".to_string(),
             content,
             thinking_content,

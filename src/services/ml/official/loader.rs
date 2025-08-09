@@ -15,7 +15,7 @@ impl OfficialLoader {
     ) -> Result<ModelWeights> {
         tracing::info!("🚀 Loading GGUF with official Candle v0.9.1 patterns");
         
-        let mut file = std::fs::File::open(path)?;
+        let mut file = std::fs::File::open(path.as_ref())?;
         let content = gguf_file::Content::read(&mut file)?;
         
         tracing::info!("📊 GGUF loaded: {} tensors, {} metadata entries",

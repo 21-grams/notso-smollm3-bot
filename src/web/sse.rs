@@ -11,23 +11,57 @@ pub async fn stream_events(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    use tokio_stream::wrappers::ReceiverStream;
+    use crate::types::events::StreamEvent;
+    
     tracing::info!("📡 SSE connection established for session: {}", session_id);
     
-    let receiver = state.sessions
-        .read()
-        .await
-        .get_event_stream(&session_id);
+    // Take receiver (only once per session)
+    let receiver = {
+        let mut sessions = state.sessions.write().await;
+        sessions.take_receiver(&session_id)
+            .expect("Receiver should be available for new SSE connection")
+    };
     
-    let stream = receiver
+    // Convert StreamEvents to SSE Events
+    let stream = ReceiverStream::new(receiver)
         .map(|event| {
-            match event {
-                Ok(evt) => Ok(Event::default()
-                    .event(evt.event_type())
-                    .data(evt.to_sse_data())),
-                Err(e) => Ok(Event::default()
-                    .event("error")
-                    .data(format!("Stream error: {}", e)))
-            }
+            let sse_event = match event {
+                StreamEvent::MessageContent { message_id, content } => {
+                    Event::default()
+                        .event("message-content")
+                        .data(format!(
+                            r#"<div hx-target='#msg-{}' hx-swap='beforeend'>{}</div>"#,
+                            message_id,
+                            html_escape::encode_text(&content)
+                        ))
+                }
+                StreamEvent::MessageComplete { message_id } => {
+                    Event::default()
+                        .event("message-complete")
+                        .data(format!(
+                            r#"<script>document.querySelector('#msg-{} .loading').remove();</script>"#,
+                            message_id
+                        ))
+                }
+                StreamEvent::MessageError { message_id, error } => {
+                    Event::default()
+                        .event("message-error")
+                        .data(format!(
+                            r#"<div hx-target='#msg-{}' hx-swap='innerHTML'>
+                                <div class='error-message'>{}</div>
+                            </div>"#,
+                            message_id, error
+                        ))
+                }
+                StreamEvent::SessionExpired => {
+                    Event::default()
+                        .event("session-expired")
+                        .data(r#"<div sse-close='true'>Session expired</div>"#)
+                }
+                _ => Event::default().event("keep-alive").data("")
+            };
+            Ok(sse_event)
         });
     
     Sse::new(stream)

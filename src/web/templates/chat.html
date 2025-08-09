@@ -14,6 +14,12 @@
 </head>
 <body>
     <div class="chat-container">
+        <!-- Persistent SSE connection for entire session -->
+        <div id="sse-handler"
+             hx-ext="sse"
+             sse-connect="/api/stream/{{ session_id }}"
+             style="display: none;">
+        </div>
         <div class="chat-header">
             <h1>SmolLM3 Chat</h1>
             <div class="system-status" id="system-status">

@@ -1,14 +1,14 @@
 use crate::state::AppState;
-use crate::services::template::TemplateEngine;
+// use crate::services::template::TemplateEngine; // Currently unused
 use axum::{
     extract::State,
     response::Html,
 };
 use uuid::Uuid;
-use minijinja::context;
+// use minijinja::context; // Currently unused
 
 pub async fn index(State(state): State<AppState>) -> Html<String> {
-    let session_id = Uuid::new_v4().to_string();
+    let session_id = Uuid::now_v7().to_string();
     
     // Initialize session
     state.sessions.write().await.create_session(&session_id);
