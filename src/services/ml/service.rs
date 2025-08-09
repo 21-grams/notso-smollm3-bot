@@ -4,10 +4,7 @@ use candle_core::{Device, Result, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use std::path::Path;
 
-use crate::smollm3::{
-    SmolLM3Tokenizer,
-    SmolLM3KVCache,
-};
+use super::smollm3::{SmolLM3Tokenizer, SmolLM3KVCache};
 use super::official::model::SmolLM3Model;
 
 /// Main ML service for SmolLM3 inference
@@ -39,9 +36,8 @@ impl MLService {
         let config = model.config().clone();
         
         // Initialize tokenizer
-        let tokenizer = SmolLM3Tokenizer::new(
-            tokenizer_path.as_ref().to_str().unwrap(),
-            template_path.as_ref().to_str().unwrap(),
+        let tokenizer = SmolLM3Tokenizer::from_file(
+            tokenizer_path.as_ref().to_str().unwrap()
         ).map_err(|e| candle_core::Error::Msg(format!("Tokenizer error: {}", e)))?;
         
         // Initialize KV cache for all layers

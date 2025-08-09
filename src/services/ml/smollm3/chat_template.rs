@@ -70,7 +70,7 @@ Let me think about this step by step.
         }).unwrap_or_default()
     }
     
-    pub fn format_single_turn(&self, user_message: &str, thinking_start: u32) -> String {
+    pub fn format_single_turn(&self, user_message: &str, thinking_mode: bool) -> String {
         let messages = vec![
             ChatMessage {
                 role: "user".to_string(),
@@ -81,7 +81,7 @@ Let me think about this step by step.
         self.format(
             &messages,
             Some("You are SmolLM3, a helpful AI assistant."),
-            true,  // Enable thinking by default
+            thinking_mode,
             true,  // Add generation prompt
         )
     }

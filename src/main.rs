@@ -16,9 +16,7 @@ use tower_http::services::ServeDir;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod services;
-mod smollm3;
 mod config;
-mod inference;
 mod state;
 mod types;
 mod web;

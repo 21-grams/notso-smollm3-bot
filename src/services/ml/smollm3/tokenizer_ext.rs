@@ -2,6 +2,8 @@
 
 use tokenizers::Tokenizer;
 use anyhow::Result;
+use super::chat_template::{ChatTemplate, ChatMessage};
+use minijinja::Environment;
 
 pub struct SmolLM3TokenizerExt {
     tokenizer: Tokenizer,
@@ -39,6 +41,23 @@ impl SmolLM3TokenizerExt {
         }
     }
     
+    /// Create tokenizer from file
+    pub fn from_file(path: &str) -> Result<Self> {
+        let tokenizer = Tokenizer::from_file(path)
+            .map_err(|e| anyhow::anyhow!("Failed to load tokenizer: {}", e))?;
+        Ok(Self::new(tokenizer))
+    }
+    
+    /// Encode text to token IDs
+    pub fn encode(&self, text: &str) -> Result<Vec<u32>> {
+        self.encode_with_special(text, true)
+    }
+    
+    /// Decode token IDs to text
+    pub fn decode(&self, ids: &[u32]) -> Result<String> {
+        self.decode_filtered(ids, false)
+    }
+    
     /// Encode with special token handling
     pub fn encode_with_special(&self, text: &str, add_special: bool) -> Result<Vec<u32>> {
         let encoding = self.tokenizer.encode(text, add_special)
@@ -74,64 +93,23 @@ impl SmolLM3TokenizerExt {
         &self.special_tokens
     }
     
-    /// Apply SmolLM3 chat template
+    /// Apply SmolLM3 chat template using the ChatTemplate struct
     pub fn apply_chat_template(
         &self,
         messages: &[ChatMessage],
         add_generation_prompt: bool,
         reasoning_mode: ReasoningMode,
     ) -> Result<String> {
-        let mut formatted = String::new();
+        let template = ChatTemplate::new();
+        let thinking_mode = reasoning_mode == ReasoningMode::Think;
         
-        // System message
-        formatted.push_str("<|im_start|>system\n");
-        formatted.push_str("You are SmolLM3, a helpful AI assistant.\n");
-        formatted.push_str("<|im_end|>\n");
-        
-        // Messages
-        for msg in messages {
-            match msg.role.as_str() {
-                "user" => {
-                    formatted.push_str("<|im_start|>user\n");
-                    formatted.push_str(&msg.content);
-                    formatted.push_str("\n<|im_end|>\n");
-                }
-                "assistant" => {
-                    formatted.push_str("<|im_start|>assistant\n");
-                    
-                    // Add thinking tokens if in thinking mode
-                    if reasoning_mode == ReasoningMode::Think {
-                        if let Some(thinking) = &msg.thinking_content {
-                            formatted.push_str("<think>\n");
-                            formatted.push_str(thinking);
-                            formatted.push_str("\n</think>\n");
-                        }
-                    }
-                    
-                    formatted.push_str(&msg.content);
-                    formatted.push_str("\n<|im_end|>\n");
-                }
-                _ => {}
-            }
-        }
-        
-        // Add generation prompt
-        if add_generation_prompt {
-            formatted.push_str("<|im_start|>assistant\n");
-            if reasoning_mode == ReasoningMode::Think {
-                formatted.push_str("<think>\n");
-            }
-        }
-        
-        Ok(formatted)
+        Ok(template.format(
+            messages,
+            Some("You are SmolLM3, a helpful AI assistant."),
+            thinking_mode,
+            add_generation_prompt,
+        ))
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-    pub thinking_content: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
