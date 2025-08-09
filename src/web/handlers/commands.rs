@@ -64,9 +64,11 @@ pub async fn set_temperature(
 pub async fn model_info(
     State(state): State<AppState>,
 ) -> JsonResponse<ModelInfo> {
+    let model_available = state.model.read().await.is_some();
+    
     let info = ModelInfo {
         model: "SmolLM3-3B-Q4_K_M".to_string(),
-        status: if state.model.read().await.is_stub() { "Stub Mode" } else { "Active" }.to_string(),
+        status: if model_available { "Active" } else { "Unavailable" }.to_string(),
         parameters: ModelParameters {
             temperature: 0.7,
             max_tokens: 2048,
@@ -82,10 +84,11 @@ pub async fn system_status(
     State(state): State<AppState>,
 ) -> JsonResponse<SystemStatus> {
     let sessions = state.sessions.read().await;
+    let model_available = state.model.read().await.is_some();
     
     let status = SystemStatus {
         server: "Running".to_string(),
-        model: if state.model.read().await.is_stub() { "Stub Mode" } else { "SmolLM3-3B" }.to_string(),
+        model: if model_available { "SmolLM3-3B" } else { "Not Loaded" }.to_string(),
         sessions: sessions.count(),
         uptime: format_uptime(),
         memory_usage: get_memory_usage(),
@@ -114,20 +117,4 @@ fn get_memory_usage() -> String {
     "0 MB".to_string()
 }
 
-// Extension trait for MLService
-impl crate::services::ml::MLService {
-    pub fn is_stub(&self) -> bool {
-        // Check if running in stub mode
-        // This would be implemented in the actual MLService
-        true
-    }
-}
 
-// Extension trait for SessionManager
-impl crate::services::SessionManager {
-    pub fn count(&self) -> usize {
-        // Count active sessions
-        // This would be implemented in the actual SessionManager
-        0
-    }
-}

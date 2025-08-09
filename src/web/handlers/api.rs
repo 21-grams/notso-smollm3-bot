@@ -138,8 +138,9 @@ async fn stream_quote_buffered(
         sessions.get_or_create_sender(&session_id)
     };
     
-    // Create streaming buffer
-    let mut buffer = StreamingBuffer::new(sender, session_id.clone());
+    // Create streaming buffer with a message ID
+    let message_id = uuid::Uuid::now_v7().to_string();
+    let mut buffer = StreamingBuffer::new(sender, message_id);
     
     // The Gospel of John 1:1-14 text
     let scripture_text = r#"# Gospel of John 1:1-14
@@ -190,7 +191,7 @@ async fn stream_quote_buffered(
     Ok(())
 }
 
-/// Generate response through buffer (stub for now)
+/// Generate response through buffer
 async fn generate_response_buffered(
     state: AppState,
     session_id: String,
@@ -202,21 +203,35 @@ async fn generate_response_buffered(
         sessions.get_or_create_sender(&session_id)
     };
     
-    // Create streaming buffer
-    let mut buffer = StreamingBuffer::new(sender, session_id.clone());
+    // Create streaming buffer with a message ID
+    let message_id = uuid::Uuid::now_v7().to_string();
+    let mut buffer = StreamingBuffer::new(sender, message_id);
     
-    // For now, just echo back with a simple response
-    let response = format!("I received your message: '{}'. This is a stub response while the model is being integrated.", message);
-    
-    // Split into words and stream
-    let words: Vec<&str> = response.split_whitespace().collect();
-    
-    for word in words {
-        buffer.push(&format!("{} ", word)).await?;
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    // Check if model is available and generate accordingly
+    let ml_service = state.model.read().await;
+    match ml_service.as_ref() {
+        Some(service) => {
+            // Try to use the model
+            if let Err(e) = service.generate_streaming(&message, &mut buffer).await {
+                // Model failed, stream error message
+                let error_msg = format!("Model generation failed: {}. Fallback to FTS5 search (TODO).", e);
+                for word in error_msg.split_whitespace() {
+                    buffer.push(&format!("{} ", word)).await?;
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                }
+            }
+        }
+        None => {
+            // No model loaded, stream fallback message
+            let fallback = "Model not loaded. Using FTS5 search on cached conversations (TODO).";
+            for word in fallback.split_whitespace() {
+                buffer.push(&format!("{} ", word)).await?;
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+        }
     }
     
-    // Complete
+    // Complete the stream
     buffer.complete().await?;
     
     Ok(())

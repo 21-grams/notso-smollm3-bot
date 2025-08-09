@@ -8,7 +8,7 @@ use anyhow::Result;
 #[derive(Clone)]
 pub struct AppState {
     pub config: Arc<Config>,
-    pub model: Arc<RwLock<MLService>>,
+    pub model: Arc<RwLock<Option<MLService>>>,  // Option - can be None if model fails to load
     pub sessions: Arc<RwLock<SessionManager>>,
     pub templates: Arc<TemplateEngine>,
 }
@@ -17,24 +17,26 @@ impl AppState {
     pub async fn new() -> Result<Self> {
         let config = Config::from_env()?;
         
-        // Initialize ML service with fallback to stub
+        // Try to load ML service, but don't fail if it doesn't work
+        let template_path = "models/smollm3_thinking_chat_template.jinja2".to_string();
         let ml_service = match MLService::new(
             &config.model_path,
             &config.tokenizer_path,
-            &config.template_path,
+            &template_path,
             config.to_candle_device(),
         ) {
             Ok(service) => {
                 tracing::info!("✅ Model loaded successfully");
-                service
+                Some(service)
             }
             Err(e) => {
-                tracing::warn!("⚠️ Model load failed: {}, using stub mode", e);
-                MLService::new_stub_mode()
+                tracing::warn!("⚠️ Model not available: {}", e);
+                tracing::info!("🌐 Server will start without model inference");
+                None
             }
         };
         
-        let templates = TemplateEngine::new()?;  // Plan shows path arg but constructor takes 0
+        let templates = TemplateEngine::new()?;
         
         Ok(Self {
             config: Arc::new(config),

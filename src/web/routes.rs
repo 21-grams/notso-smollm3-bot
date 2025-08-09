@@ -3,7 +3,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tower_http::services::ServeDir;
 
 pub fn create_routes(state: AppState) -> Router {
     Router::new()
@@ -13,7 +12,7 @@ pub fn create_routes(state: AppState) -> Router {
         
         // API endpoints - Single streaming endpoint for all content
         .route("/api/chat", post(super::handlers::api::send_message))
-        .route("/api/stream/:session_id", get(super::handlers::api::stream_session))
+        .route("/api/stream/{session_id}", get(super::handlers::api::stream_session))
         .route("/api/toggle-thinking", post(super::handlers::api::toggle_thinking))
         
         // Slash command endpoints
@@ -22,12 +21,9 @@ pub fn create_routes(state: AppState) -> Router {
         .route("/api/model-info", get(super::handlers::commands::model_info))
         .route("/api/status", get(super::handlers::commands::system_status))
         .route("/api/export-chat", get(super::handlers::commands::export_chat))
-        
+
         // Health check
         .route("/health", get(super::handlers::health::health_check))
-        
-        // Static files
-        .nest_service("/static", ServeDir::new("src/web/static"))
         
         .with_state(state)
 }

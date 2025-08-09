@@ -22,20 +22,6 @@ pub struct MLService {
 }
 
 impl MLService {
-    /// Create a new ML service with stub mode fallback
-    pub fn new_stub_mode() -> Self {
-        tracing::info!("🤖 Creating stub mode ML service");
-        
-        // We'll return a special instance that doesn't use the model
-        // This is a placeholder - the actual implementation will use stub_mode service
-        panic!("Stub mode needs proper implementation without model");
-    }
-    
-    /// Check if running in stub mode (for now always returns true until model loading is fixed)
-    pub fn is_stub(&self) -> bool {
-        // TODO: Track actual stub mode status
-        false
-    }
     
     /// Generate with streaming support
     pub async fn generate_streaming(
@@ -43,16 +29,9 @@ impl MLService {
         _prompt: &str,
         buffer: &mut crate::services::StreamingBuffer,
     ) -> anyhow::Result<()> {
-        // Use stub mode for now
-        let tokens = vec!["Hello", " there", "!", " How", " can", " I", " help", " you", " today", "?"];
-        
-        for token in tokens {
-            buffer.push(token).await?;
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-        
-        buffer.complete().await?;
-        Ok(())
+        // TODO: Implement actual model inference here
+        // For now, return an error to indicate model is not ready
+        Err(anyhow::anyhow!("Model inference not yet implemented"))
     }
     pub fn new<P: AsRef<Path>>(
         model_path: P,
