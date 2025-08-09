@@ -25,5 +25,8 @@ pub fn create_routes(state: AppState) -> Router {
         // Health check
         .route("/health", get(super::handlers::health::health_check))
         
+        // SSE Test endpoint
+        .route("/test-sse", get(super::handlers::api::test_sse))
+        
         .with_state(state)
 }

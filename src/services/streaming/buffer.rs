@@ -1,10 +1,10 @@
 use crate::types::events::StreamEvent;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use std::time::{Duration, Instant};
 use anyhow::Result;
 
 pub struct StreamingBuffer {
-    sender: mpsc::Sender<StreamEvent>,
+    sender: broadcast::Sender<StreamEvent>,
     buffer: String,
     token_count: usize,
     last_send: Instant,
@@ -12,7 +12,7 @@ pub struct StreamingBuffer {
 }
 
 impl StreamingBuffer {
-    pub fn new(sender: mpsc::Sender<StreamEvent>, message_id: String) -> Self {
+    pub fn new(sender: broadcast::Sender<StreamEvent>, message_id: String) -> Self {
         Self {
             sender,
             buffer: String::new(),
@@ -40,7 +40,8 @@ impl StreamingBuffer {
                 message_id: self.message_id.clone(),
                 content: self.buffer.clone(),
             };
-            self.sender.send(event).await?;
+            // Broadcast send doesn't require await
+            let _ = self.sender.send(event);
             self.buffer.clear();
             self.token_count = 0;
             self.last_send = Instant::now();
@@ -51,18 +52,18 @@ impl StreamingBuffer {
     pub async fn complete(&mut self) -> Result<()> {
         self.flush().await?;
         tracing::info!("Sending complete event for message {}", self.message_id);
-        self.sender.send(StreamEvent::MessageComplete {
+        let _ = self.sender.send(StreamEvent::MessageComplete {
             message_id: self.message_id.clone(),
-        }).await?;
+        });
         Ok(())
     }
     
     pub async fn error(&mut self, error: String) -> Result<()> {
         self.flush().await?;
-        self.sender.send(StreamEvent::MessageError {
+        let _ = self.sender.send(StreamEvent::MessageError {
             message_id: self.message_id.clone(),
             error,
-        }).await?;
+        });
         Ok(())
     }
 }

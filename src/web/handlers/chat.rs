@@ -10,8 +10,11 @@ use uuid::Uuid;
 pub async fn index(State(state): State<AppState>) -> Html<String> {
     let session_id = Uuid::now_v7().to_string();
     
-    // Initialize session
-    state.sessions.write().await.create_session(&session_id);
+    // Initialize session BEFORE rendering the page
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.create_session(&session_id);
+    }
     
     // Check model status
     let model_status = if state.model.read().await.is_some() {

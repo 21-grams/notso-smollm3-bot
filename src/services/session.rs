@@ -1,6 +1,6 @@
 use crate::types::events::StreamEvent;
 use std::collections::HashMap;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, broadcast};
 use chrono::{DateTime, Utc};
 
 pub struct SessionManager {
@@ -13,9 +13,8 @@ pub struct SessionState {
     pub thinking_mode: bool,
     pub created_at: DateTime<Utc>,
     pub last_activity: DateTime<Utc>,
-    // Single persistent channel per session
-    pub event_sender: mpsc::Sender<StreamEvent>,
-    pub event_receiver: Option<mpsc::Receiver<StreamEvent>>,
+    // Use broadcast channel for multiple receivers
+    pub event_sender: broadcast::Sender<StreamEvent>,
 }
 
 #[derive(Clone, Debug)]
@@ -40,19 +39,9 @@ impl SessionManager {
     }
     
     pub fn create_session(&mut self, session_id: &str) {
-        // Always recreate the receiver if it's been taken
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            if session.event_receiver.is_none() {
-                // Receiver was taken, create a new channel
-                let (tx, rx) = mpsc::channel(100);
-                session.event_sender = tx;
-                session.event_receiver = Some(rx);
-                session.last_activity = Utc::now();
-                tracing::debug!("Recreated SSE channel for existing session: {}", session_id);
-            }
-        } else {
-            // Create new session
-            let (tx, rx) = mpsc::channel(100);
+        if !self.sessions.contains_key(session_id) {
+            // Create new session with broadcast channel
+            let (tx, _rx) = broadcast::channel(100);
             
             let session = SessionState {
                 id: session_id.to_string(),
@@ -61,23 +50,27 @@ impl SessionManager {
                 created_at: Utc::now(),
                 last_activity: Utc::now(),
                 event_sender: tx,
-                event_receiver: Some(rx),
             };
             
             self.sessions.insert(session_id.to_string(), session);
             tracing::debug!("Created new session: {}", session_id);
+        } else {
+            // Update last activity for existing session
+            if let Some(session) = self.sessions.get_mut(session_id) {
+                session.last_activity = Utc::now();
+            }
         }
     }
     
-    pub fn get_sender(&self, session_id: &str) -> Option<mpsc::Sender<StreamEvent>> {
+    pub fn get_sender(&self, session_id: &str) -> Option<broadcast::Sender<StreamEvent>> {
         self.sessions.get(session_id).map(|s| s.event_sender.clone())
     }
     
-    pub fn take_receiver(&mut self, session_id: &str) -> Option<mpsc::Receiver<StreamEvent>> {
-        self.sessions.get_mut(session_id)?.event_receiver.take()
+    pub fn subscribe(&mut self, session_id: &str) -> Option<broadcast::Receiver<StreamEvent>> {
+        self.sessions.get(session_id).map(|s| s.event_sender.subscribe())
     }
     
-    pub fn get_or_create_sender(&mut self, session_id: &str) -> mpsc::Sender<StreamEvent> {
+    pub fn get_or_create_sender(&mut self, session_id: &str) -> broadcast::Sender<StreamEvent> {
         self.create_session(session_id);
         self.get_sender(session_id).unwrap()
     }

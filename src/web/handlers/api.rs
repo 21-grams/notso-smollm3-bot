@@ -13,7 +13,7 @@ use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::wrappers::BroadcastStream;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -58,7 +58,7 @@ pub async fn send_message(
     
     // Handle command or model generation in background
     tokio::spawn(async move {
-        tracing::debug!("Processing message in background task");
+        tracing::info!("Processing message '{}' in background task for session {}", message, session_id);
         
         if message.starts_with("/quote") {
             // Use buffered streaming for quote
@@ -81,18 +81,29 @@ pub async fn stream_session(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     tracing::info!("SSE connection request for session: {}", session_id);
     
-    // Ensure session exists and has a receiver
+    // Ensure session exists and subscribe to its broadcast channel
     let receiver = {
         let mut sessions = state.sessions.write().await;
-        sessions.create_session(&session_id);  // This now handles reconnections
-        sessions.take_receiver(&session_id)
-            .expect("Receiver should be available after create_session")
+        sessions.create_session(&session_id);  // Ensure session exists
+        sessions.subscribe(&session_id)
+            .expect("Session should exist after create_session")
     };
     
-    // Create stream from receiver
-    let stream = ReceiverStream::new(receiver)
+    // Create stream from broadcast receiver
+    let stream = BroadcastStream::new(receiver)
+        .map(|result| {
+            match result {
+                Ok(event) => {
+                    tracing::info!("Processing SSE event: {:?}", event);
+                    event
+                },
+                Err(e) => {
+                    tracing::debug!("Broadcast lag error: {}", e);
+                    StreamEvent::KeepAlive  // Send keepalive on error
+                }
+            }
+        })
         .map(|event| {
-            tracing::info!("Processing SSE event: {:?}", event);
             let sse_event = match event {
                 StreamEvent::MessageContent { message_id, content } => {
                     // Send raw text/markdown - NO HTML escaping
@@ -231,7 +242,7 @@ async fn generate_response_buffered(
     };
     
     // Create streaming buffer with the provided message ID
-    let mut buffer = StreamingBuffer::new(sender, message_id);
+    let mut buffer = StreamingBuffer::new(sender, message_id.clone());
     
     // Check if model is available and generate accordingly
     let ml_service = state.model.read().await;
@@ -244,6 +255,10 @@ async fn generate_response_buffered(
                                         Error: {}\n\n\
                                         Searching cached conversations with FTS5...\n\n\
                                         *(FTS5 search integration pending)*", e);
+                
+                // Log the error for debugging
+                tracing::error!("Model generation failed for message {}: {}", message_id, e);
+                
                 for word in error_msg.split_whitespace() {
                     buffer.push(&format!("{} ", word)).await?;
                     tokio::time::sleep(Duration::from_millis(30)).await;
@@ -256,6 +271,10 @@ async fn generate_response_buffered(
                            Using FTS5 search on cached conversations.\n\n\
                            *(This is a placeholder - FTS5 integration coming soon)*\n\n\
                            You can still use slash commands like `/quote` or `/status`.";
+            
+            // Log fallback usage
+            tracing::warn!("No model available for message {}, using fallback", message_id);
+            
             for word in fallback.split_whitespace() {
                 buffer.push(&format!("{} ", word)).await?;
                 tokio::time::sleep(Duration::from_millis(30)).await;
@@ -276,4 +295,74 @@ pub async fn toggle_thinking(
     // This would update the session's thinking mode
     // For now, just return status
     Html("<span id='thinking-status'>ON</span>".to_string())
+}
+
+/// Test SSE streaming directly
+pub async fn test_sse(
+    State(state): State<AppState>,
+) -> Html<String> {
+    // Create a test session and send a test message
+    let session_id = "test-session";
+    let message_id = Uuid::now_v7().to_string();
+    
+    let sender = {
+        let mut sessions = state.sessions.write().await;
+        sessions.get_or_create_sender(session_id)
+    };
+    
+    // Send test events
+    tokio::spawn(async move {
+        let _ = sender.send(StreamEvent::MessageContent {
+            message_id: message_id.clone(),
+            content: "Test message streaming... ".to_string(),
+        });
+        
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        
+        let _ = sender.send(StreamEvent::MessageContent {
+            message_id: message_id.clone(),
+            content: "**Bold text** and *italic* text. ".to_string(),
+        });
+        
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        
+        let _ = sender.send(StreamEvent::MessageComplete {
+            message_id,
+        });
+    });
+    
+    Html(format!(r#"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>SSE Test</title>
+            <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+        </head>
+        <body>
+            <h1>SSE Test Page</h1>
+            <div id="messages"></div>
+            <script>
+                const eventSource = new EventSource('/api/stream/test-session');
+                let content = '';
+                
+                eventSource.addEventListener('message', function(e) {{
+                    console.log('Message:', e.data);
+                    const [msgId, text] = e.data.split('|');
+                    content += text || '';
+                    document.getElementById('messages').textContent = content;
+                }});
+                
+                eventSource.addEventListener('complete', function(e) {{
+                    console.log('Complete:', e.data);
+                    const html = marked.parse(content);
+                    document.getElementById('messages').innerHTML = html;
+                }});
+                
+                eventSource.addEventListener('error', function(e) {{
+                    console.error('Error:', e);
+                }});
+            </script>
+        </body>
+        </html>
+    "#))
 }

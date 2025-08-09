@@ -13,8 +13,11 @@
     <!-- Lightweight markdown parser -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
-<body hx-ext="sse" sse-connect="/api/stream/{{ session_id }}">
+<body>
     <div class="chat-container">
+        <!-- SSE connection handler -->
+        <div hx-ext="sse" sse-connect="/api/stream/{{ session_id }}" sse-swap="none"></div>
+        
         <div class="chat-header">
             <h1>SmolLM3 Chat</h1>
             <div class="system-status" id="system-status">
@@ -87,103 +90,98 @@
     <script>
         console.log('[SmolLM3] Chat initialized with session: {{ session_id }}');
         
-        // SSE connection status tracking
-        let sseConnected = false;
-        
-        // Monitor SSE connection
-        document.body.addEventListener('htmx:sseOpen', function(evt) {
-            console.log('[SSE] Connection opened');
-            sseConnected = true;
-            updateConnectionStatus(true);
-        });
-        
-        document.body.addEventListener('htmx:sseError', function(evt) {
-            console.log('[SSE] Connection error:', evt.detail);
-            sseConnected = false;
-            updateConnectionStatus(false);
-        });
-        
-        document.body.addEventListener('htmx:sseClose', function(evt) {
-            console.log('[SSE] Connection closed');
-            sseConnected = false;
-            updateConnectionStatus(false);
-        });
-        
-        function updateConnectionStatus(connected) {
-            const statusBadge = document.querySelector('.status-badge');
-            if (statusBadge) {
-                if (connected) {
-                    statusBadge.style.color = '#4CAF50';
+        // Wait for HTMX to be ready
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('[HTMX] Version:', htmx?.version);
+            
+            // Configure marked for safe markdown rendering
+            marked.setOptions({
+                breaks: true,
+                gfm: true,
+                sanitize: false
+            });
+            
+            // Manual EventSource as HTMX SSE might not be working
+            const eventSource = new EventSource('/api/stream/{{ session_id }}');
+            
+            eventSource.addEventListener('message', function(e) {
+                console.log('[SSE] Message event:', e.data);
+                const [messageId, ...contentParts] = e.data.split('|');
+                const content = contentParts.join('|');
+                
+                const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
+                if (messageEl) {
+                    console.log('[SSE] Updating message bubble for:', messageId);
+                    
+                    // Remove loading indicator on first content
+                    const loading = messageEl.querySelector('.loading');
+                    if (loading) {
+                        loading.remove();
+                        console.log('[SSE] Removed loading indicator');
+                    }
+                    
+                    // Store raw content in data attribute
+                    const currentContent = messageEl.dataset.rawContent || '';
+                    messageEl.dataset.rawContent = currentContent + content;
+                    // Show plain text while streaming
+                    messageEl.textContent = messageEl.dataset.rawContent;
                 } else {
-                    statusBadge.style.color = '#f44336';
+                    console.warn('[SSE] Could not find message element for:', messageId);
                 }
-            }
-        }
-        
-        // Configure marked for safe markdown rendering
-        marked.setOptions({
-            breaks: true,
-            gfm: true,
-            sanitize: false
-        });
-        
-        // Listen for HTMX SSE events (htmx prefix for v2.0)
-        document.body.addEventListener('htmx:sse:message', function(evt) {
-            console.log('[SSE] Message event received:', evt.detail);
-            // SSE message format: "messageId|content"
-            const data = evt.detail.data;
-            const [messageId, ...contentParts] = data.split('|');
-            const content = contentParts.join('|'); // In case content has pipes
+            });
             
-            const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
-            if (messageEl) {
-                // Remove loading indicator on first content
-                const loading = messageEl.querySelector('.loading');
-                if (loading) loading.remove();
+            eventSource.addEventListener('complete', function(e) {
+                console.log('[SSE] Complete event:', e.data);
+                const messageId = e.data;
+                const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
                 
-                // Append raw text/markdown to existing content
-                // Store in data attribute to preserve raw markdown
-                const currentContent = messageEl.dataset.rawContent || '';
-                messageEl.dataset.rawContent = currentContent + content;
-                // Show plain text while streaming
-                messageEl.textContent = messageEl.dataset.rawContent;
-            }
-        });
-        
-        // Handle completion event - trigger markdown rendering
-        document.body.addEventListener('htmx:sse:complete', function(evt) {
-            console.log('[SSE] Complete event received:', evt.detail);
-            const messageId = evt.detail.data;
-            const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
+                if (messageEl) {
+                    console.log('[SSE] Completing message:', messageId);
+                    
+                    // Get the accumulated raw text/markdown
+                    const rawContent = messageEl.dataset.rawContent || messageEl.textContent;
+                    console.log('[SSE] Raw content to render:', rawContent);
+                    
+                    // Render markdown to formatted HTML
+                    const formattedHtml = marked.parse(rawContent);
+                    console.log('[SSE] Formatted HTML:', formattedHtml);
+                    
+                    // Update with formatted content
+                    messageEl.innerHTML = formattedHtml;
+                    
+                    // Auto-scroll to bottom
+                    const messages = document.getElementById('chat-messages');
+                    messages.scrollTop = messages.scrollHeight;
+                } else {
+                    console.warn('[SSE] Could not find message element for completion:', messageId);
+                }
+            });
             
-            if (messageEl) {
-                // Remove any remaining loading indicator
-                const loading = messageEl.querySelector('.loading');
-                if (loading) loading.remove();
+            eventSource.addEventListener('message-error', function(e) {
+                console.log('[SSE] Error event:', e.data);
+                const [messageId, error] = e.data.split('|');
+                const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
                 
-                // Get the accumulated raw text/markdown from data attribute
-                const rawContent = messageEl.dataset.rawContent || messageEl.textContent;
-                
-                // Render markdown to formatted HTML
-                const formattedHtml = marked.parse(rawContent);
-                
-                // Update with formatted content
-                messageEl.innerHTML = formattedHtml;
-                
-                // Auto-scroll to bottom
-                const messages = document.getElementById('chat-messages');
-                messages.scrollTop = messages.scrollHeight;
-            }
-        });
-        
-        // Handle error events
-        document.body.addEventListener('htmx:sse:message-error', function(evt) {
-            console.log('[SSE] Error event received:', evt.detail);
-            const [messageId, error] = evt.detail.data.split('|');
-            const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
+                if (messageEl) {
+                    messageEl.innerHTML = `<div class="error-message">Error: ${error}</div>`;
+                }
+            });
             
-            if (messageEl) {
-                messageEl.innerHTML = `<div class="error-message">Error: ${error}</div>`;
+            eventSource.addEventListener('error', function(e) {
+                console.error('[SSE] Connection error:', e);
+                updateConnectionStatus(false);
+            });
+            
+            eventSource.addEventListener('open', function(e) {
+                console.log('[SSE] Connection opened');
+                updateConnectionStatus(true);
+            });
+            
+            function updateConnectionStatus(connected) {
+                const statusBadge = document.querySelector('.status-badge');
+                if (statusBadge) {
+                    statusBadge.style.color = connected ? '#4CAF50' : '#f44336';
+                }
             }
         });
         
@@ -207,8 +205,8 @@
                 const menu = document.getElementById('slash-command-menu');
                 if (!menu || !menu.classList.contains('active')) {
                     e.preventDefault();
-                    // Use HTMX to submit the form
-                    htmx.trigger('#chat-form', 'submit');
+                    // Submit form
+                    document.getElementById('chat-form').requestSubmit();
                 }
             }
         });

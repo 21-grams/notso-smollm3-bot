@@ -11,20 +11,27 @@ pub async fn stream_events(
     Path(session_id): Path<String>,
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    use tokio_stream::wrappers::ReceiverStream;
+    use tokio_stream::wrappers::BroadcastStream;
     use crate::types::events::StreamEvent;
     
     tracing::info!("📡 SSE connection established for session: {}", session_id);
     
-    // Take receiver (only once per session)
+    // Subscribe to broadcast channel
     let receiver = {
         let mut sessions = state.sessions.write().await;
-        sessions.take_receiver(&session_id)
-            .expect("Receiver should be available for new SSE connection")
+        sessions.create_session(&session_id);  // Ensure session exists
+        sessions.subscribe(&session_id)
+            .expect("Session should exist after create_session")
     };
     
     // Convert StreamEvents to SSE Events
-    let stream = ReceiverStream::new(receiver)
+    let stream = BroadcastStream::new(receiver)
+        .map(|result| {
+            match result {
+                Ok(event) => event,
+                Err(_) => StreamEvent::KeepAlive  // Ignore lag errors
+            }
+        })
         .map(|event| {
             let sse_event = match event {
                 StreamEvent::MessageContent { message_id, content } => {
