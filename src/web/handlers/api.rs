@@ -2,16 +2,18 @@
 
 use crate::state::AppState;
 use crate::services::template::ChatTemplateService;
+use crate::services::streaming::StreamingBuffer;
+use crate::types::events::StreamEvent;
 use axum::{
     extract::{State, Path, Form},
-    response::{Html, sse::{Event, Sse}},
+    response::{Html, sse::{Event, Sse, KeepAlive}},
     http::StatusCode,
 };
-use futures::stream::{self, Stream};
+use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::time::Duration;
-use tokio_stream::StreamExt;
+use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -31,76 +33,185 @@ pub async fn send_message(
     State(state): State<AppState>,
     Form(msg): Form<ChatMessage>,
 ) -> Html<String> {
-    // Check if message is a slash command
-    if msg.message.starts_with("/quote") {
-        // Return HTML that includes both user message and assistant response with SSE
-        let message_id = uuid::Uuid::new_v4().to_string();
-        
-        let html = format!(
-            r#"<div class="message user">
-                <div class="message-bubble">{}</div>
-            </div>
-            <div class="message assistant" id="msg-{}">
-                <div class="message-bubble" 
-                     hx-ext="sse"
-                     sse-connect="/api/stream/quote/{}/{}" 
-                     sse-swap="message">
-                    <!-- Content will be streamed here -->
-                </div>
-            </div>"#,
-            html_escape::encode_text(&msg.message),
-            message_id,
-            msg.session_id,
-            message_id
-        );
-        
-        return Html(html);
-    }
-    // Render user message immediately
-    let template_service = ChatTemplateService::new().unwrap();
-    let user_html = template_service
-        .render_user_message(&msg.message)
-        .unwrap_or_default();
+    let message_id = Uuid::new_v4().to_string();
     
-    // Start generation in background
-    let model = state.model.clone();
+    // Always return the same HTML structure for all messages
+    let html = format!(
+        r#"<div class="message user">
+            <div class="message-bubble">{}</div>
+        </div>
+        <div class="message assistant" id="msg-{}">
+            <div class="message-bubble" 
+                 hx-ext="sse"
+                 sse-connect="/api/stream/{}" 
+                 sse-swap="innerHTML"
+                 sse-close="complete">
+                <span class="loading">Thinking...</span>
+            </div>
+        </div>"#,
+        html_escape::encode_text(&msg.message),
+        message_id,
+        msg.session_id  // Use standard session streaming
+    );
+    
+    // Clone values for the spawned task
     let session_id = msg.session_id.clone();
     let message = msg.message.clone();
+    let state_clone = state.clone();
     
+    // Handle command or model generation in background
     tokio::spawn(async move {
-        let _ = model.generate_response(&session_id, &message).await;
+        if message.starts_with("/quote") {
+            // Use buffered streaming for quote
+            let _ = stream_quote_buffered(state_clone, session_id).await;
+        } else {
+            // Regular model generation (also uses buffer)
+            let _ = generate_response_buffered(state_clone, session_id, message).await;
+        }
     });
     
-    // Return user message HTML for immediate display
-    Html(user_html)
+    Html(html)
 }
 
-/// Stream events for a session
+/// Stream events for a session using the unified buffer
 pub async fn stream_events(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let sessions = state.sessions.read().await;
-    let stream = sessions.get_event_stream(&session_id);
+    // Get the receiver for this session
+    let receiver = {
+        let sessions = state.sessions.read().await;
+        sessions.get_event_receiver(&session_id)
+    };
     
-    let event_stream = stream.map(|event| {
-        match event {
-            Ok(evt) => {
-                let data = evt.to_sse_data();
-                let event_type = evt.event_type();
-                Ok(Event::default()
-                    .event(event_type)
-                    .data(data))
-            }
-            Err(_) => Ok(Event::default().data("error"))
-        }
-    });
+    // Create stream from receiver
+    let stream = ReceiverStream::new(receiver)
+        .map(|event| {
+            let sse_event = match event {
+                StreamEvent::Content(text) => {
+                    Event::default()
+                        .event("message")
+                        .data(text)
+                }
+                StreamEvent::Complete => {
+                    Event::default()
+                        .event("complete")
+                        .data("done")
+                }
+                StreamEvent::Error(err) => {
+                    Event::default()
+                        .event("error")
+                        .data(err)
+                }
+                _ => {
+                    Event::default()
+                        .event("status")
+                        .data("processing")
+                }
+            };
+            Ok(sse_event)
+        });
     
-    Sse::new(event_stream).keep_alive(
-        axum::response::sse::KeepAlive::new()
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
             .interval(Duration::from_secs(30))
             .text("keep-alive")
     )
+}
+
+/// Stream quote content through the buffer
+async fn stream_quote_buffered(
+    state: AppState,
+    session_id: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Get session's event sender
+    let sender = {
+        let mut sessions = state.sessions.write().await;
+        sessions.get_or_create_sender(&session_id)
+    };
+    
+    // Create streaming buffer
+    let mut buffer = StreamingBuffer::new(session_id.clone(), sender);
+    
+    // The Gospel of John 1:1-14 text
+    let scripture_text = r#"# Gospel of John 1:1-14
+*Recovery Version*
+
+**1** In the beginning was the Word, and the Word was with God, and the Word was God.
+
+**2** He was in the beginning with God.
+
+**3** All things came into being through Him, and apart from Him not one thing came into being which has come into being.
+
+**4** In Him was life, and the life was the light of men.
+
+**5** And the light shines in the darkness, and the darkness did not overcome it.
+
+**6** There came a man sent from God, whose name was John.
+
+**7** He came for a testimony that he might testify concerning the light, that all might believe through him.
+
+**8** He was not the light, but came that he might testify concerning the light.
+
+**9** This was the true light which, coming into the world, enlightens every man.
+
+**10** He was in the world, and the world came into being through Him, yet the world did not know Him.
+
+**11** He came to His own, yet those who were His own did not receive Him.
+
+**12** But as many as received Him, to them He gave the authority to become children of God, to those who believe into His name,
+
+**13** Who were begotten not of blood, nor of the will of the flesh, nor of the will of man, but of God.
+
+**14** And the Word became flesh and tabernacled among us (and we beheld His glory, glory as of the only Begotten from the Father), full of grace and reality."#;
+    
+    // Split into words for token-like streaming
+    let words: Vec<&str> = scripture_text.split_whitespace().collect();
+    
+    // Push words through buffer
+    for word in words {
+        buffer.push(&format!("{} ", word)).await?;
+        
+        // Small delay to simulate generation
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    
+    // Signal completion
+    buffer.complete().await?;
+    
+    Ok(())
+}
+
+/// Generate response through buffer (stub for now)
+async fn generate_response_buffered(
+    state: AppState,
+    session_id: String,
+    message: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Get session's event sender
+    let sender = {
+        let mut sessions = state.sessions.write().await;
+        sessions.get_or_create_sender(&session_id)
+    };
+    
+    // Create streaming buffer
+    let mut buffer = StreamingBuffer::new(session_id.clone(), sender);
+    
+    // For now, just echo back with a simple response
+    let response = format!("I received your message: '{}'. This is a stub response while the model is being integrated.", message);
+    
+    // Split into words and stream
+    let words: Vec<&str> = response.split_whitespace().collect();
+    
+    for word in words {
+        buffer.push(&format!("{} ", word)).await?;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    
+    // Complete
+    buffer.complete().await?;
+    
+    Ok(())
 }
 
 /// Toggle thinking mode

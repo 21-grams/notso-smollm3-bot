@@ -5,8 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SmolLM3 Chat</title>
     <link rel="stylesheet" href="/static/css/chat-minimal.css">
+    <link rel="stylesheet" href="/static/css/chat-input.css">
+    <link rel="stylesheet" href="/static/css/slash-commands.css">
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+    <!-- Lightweight markdown parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
     <div class="chat-container">
@@ -14,13 +18,11 @@
             <h1>SmolLM3 Chat</h1>
             <div class="system-status" id="system-status">
                 <span class="status-badge">Ready</span>
+                <span class="command-hint">Type / for commands</span>
             </div>
         </div>
         
-        <div class="chat-messages" 
-             id="chat-messages"
-             hx-ext="sse"
-             sse-connect="/api/stream/{{ session_id }}">
+        <div class="chat-messages" id="chat-messages">
             <!-- Initial greeting -->
             <div class="message assistant">
                 <div class="message-bubble">
@@ -35,7 +37,7 @@
         </div>
         
         <div class="chat-input">
-            <!-- Thinking mode toggle -->
+            <!-- Input controls -->
             <div class="input-controls">
                 <label class="thinking-toggle">
                     <input type="checkbox" 
@@ -59,158 +61,95 @@
                   hx-target="#chat-messages"
                   hx-swap="beforeend">
                 <input type="hidden" name="session_id" value="{{ session_id }}">
-                <textarea 
-                       name="message" 
-                       id="message-input"
-                       placeholder="Type your message... (Alt+Enter for new line)"
-                       required
-                       autofocus
-                       rows="1"></textarea>
+                
+                <!-- Input wrapper for positioning and flex growth -->
+                <div class="input-wrapper">
+                    <textarea 
+                           name="message" 
+                           id="message-input"
+                           placeholder="Type your message or / for commands..."
+                           required
+                           autofocus
+                           rows="1"></textarea>
+                    <!-- Slash command menu will be inserted here by JS -->
+                </div>
+                
                 <button type="submit" id="send-button">Send</button>
             </form>
         </div>
     </div>
     
+    <!-- Load slash commands module -->
+    <script src="/static/js/slash-commands.js"></script>
+    
+    <!-- Chat functionality with markdown support -->
     <script>
         console.log('[SmolLM3] Chat initialized with session: {{ session_id }}');
         
-        // Core functionality
-        const messageInput = document.getElementById('message-input');
-        const chatForm = document.getElementById('chat-form');
-        const chatMessages = document.getElementById('chat-messages');
-        const statusDisplay = document.getElementById('status-display');
-        const contextText = document.getElementById('context-text');
-        
-        // Auto-resize textarea and handle Alt+Enter
-        messageInput.addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+        // Configure marked for safe markdown rendering
+        marked.setOptions({
+            breaks: true,
+            gfm: true,
+            sanitize: false // We'll handle HTML escaping server-side
         });
         
-        messageInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                if (!e.altKey) {
-                    // Enter without Alt - submit form
-                    e.preventDefault();
-                    chatForm.requestSubmit();
-                }
-                // Alt+Enter - allow new line (default behavior)
+        // Auto-resize textarea
+        const messageInput = document.getElementById('message-input');
+        messageInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            const newHeight = Math.min(this.scrollHeight, 120);
+            this.style.height = newHeight + 'px';
+            
+            if (this.scrollHeight > 120) {
+                this.classList.add('has-overflow');
+            } else {
+                this.classList.remove('has-overflow');
             }
         });
         
-        // Form submission
-        chatForm.addEventListener('htmx:afterRequest', function(evt) {
+        // Handle Enter key (submit) vs Shift+Enter (new line)
+        messageInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                const menu = document.getElementById('slash-command-menu');
+                if (!menu || !menu.classList.contains('active')) {
+                    e.preventDefault();
+                    this.form.requestSubmit();
+                }
+            }
+        });
+        
+        // Form submission cleanup
+        document.getElementById('chat-form').addEventListener('htmx:afterRequest', function(evt) {
             console.log('[SmolLM3] Message sent');
             messageInput.value = '';
             messageInput.style.height = 'auto';
             messageInput.focus();
         });
         
-        // SSE event handling
+        // Auto-scroll when new content is added
+        const observer = new MutationObserver(() => {
+            const messages = document.getElementById('chat-messages');
+            messages.scrollTop = messages.scrollHeight;
+        });
+        observer.observe(document.getElementById('chat-messages'), { 
+            childList: true, 
+            subtree: true 
+        });
+        
+        // Process markdown in SSE messages
         document.body.addEventListener('htmx:sseMessage', function(evt) {
-            const eventType = evt.detail.sseEventName;
-            const data = evt.detail.data;
-            
-            console.log(`[SSE] Event: ${eventType}`, data);
-            
-            try {
-                const parsed = JSON.parse(data);
-                
-                switch(eventType) {
-                    case 'token':
-                        appendToken(parsed.content);
-                        break;
-                    case 'thinking':
-                        handleThinking(parsed.content);
-                        break;
-                    case 'complete':
-                        onComplete();
-                        break;
-                    case 'error':
-                        handleError(parsed.message);
-                        break;
-                    default:
-                        console.log(`[SSE] Unhandled event: ${eventType}`);
-                }
-            } catch (e) {
-                console.error('[SSE] Parse error:', e);
+            // If the message contains markdown, render it
+            if (evt.detail.data && evt.detail.elt) {
+                const rendered = marked.parse(evt.detail.data);
+                evt.detail.elt.innerHTML = rendered;
             }
         });
         
-        // Connection error handling
-        document.body.addEventListener('htmx:sseError', function(evt) {
-            console.error('[SSE] Connection error:', evt.detail);
-            handleConnectionError();
-        });
-        
-        let currentAssistantMessage = null;
-        let tokenCount = 0;
-        
-        function appendToken(token) {
-            if (!currentAssistantMessage) {
-                // Create new assistant message
-                currentAssistantMessage = document.createElement('div');
-                currentAssistantMessage.className = 'message assistant';
-                currentAssistantMessage.innerHTML = '<div class="message-bubble"></div>';
-                chatMessages.appendChild(currentAssistantMessage);
-            }
-            
-            const bubble = currentAssistantMessage.querySelector('.message-bubble');
-            bubble.textContent += token;
-            
-            // Update token count (rough estimate)
-            tokenCount += Math.ceil(token.length / 4);
-            contextText.textContent = `${tokenCount} / 2048 tokens`;
-            
-            // Auto-scroll
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+        // Load theme preference
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'dark') {
+            document.body.classList.add('dark-theme');
         }
-        
-        function handleThinking(content) {
-            console.log('[Thinking]', content);
-            statusDisplay.style.display = 'block';
-            statusDisplay.querySelector('.status-text').textContent = 'Thinking...';
-        }
-        
-        function onComplete() {
-            console.log('[SmolLM3] Response complete');
-            currentAssistantMessage = null;
-            statusDisplay.style.display = 'none';
-        }
-        
-        function handleError(message) {
-            console.error('[SmolLM3] Error:', message);
-            const errorDiv = document.createElement('div');
-            errorDiv.className = 'message error';
-            errorDiv.innerHTML = `<div class="message-bubble">Error: ${message}</div>`;
-            chatMessages.appendChild(errorDiv);
-            statusDisplay.style.display = 'none';
-        }
-        
-        function handleConnectionError() {
-            // TODO: Implement FTS cache fallback
-            // For now, just show offline message
-            const offlineMsg = document.createElement('div');
-            offlineMsg.className = 'message error';
-            offlineMsg.innerHTML = `
-                <div class="message-bubble">
-                    Server is offline, do you want to fallback to FTS cache search?
-                    <button onclick="console.log('TODO: Implement FTS fallback')" disabled>
-                        Use Cache (Not Implemented)
-                    </button>
-                </div>
-            `;
-            chatMessages.appendChild(offlineMsg);
-        }
-        
-        // Debug: Log all HTMX events
-        document.body.addEventListener('htmx:beforeRequest', () => {
-            console.log('[HTMX] Sending request...');
-        });
-        
-        document.body.addEventListener('htmx:afterRequest', (evt) => {
-            console.log('[HTMX] Request complete:', evt.detail);
-        });
     </script>
 </body>
 </html>

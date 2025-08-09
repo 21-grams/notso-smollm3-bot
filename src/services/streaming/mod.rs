@@ -1,16 +1,7 @@
-//! Streaming module for smooth token delivery
+//! Unified streaming services
 
 mod buffer;
 mod sse_handler;
 
-pub use buffer::{
-    StreamBufferConfig,
-    TokenStreamBuffer,
-    HtmxStreamProcessor,
-    WordBuffer,
-};
-
-pub use sse_handler::{
-    stream_smooth_sse,
-    stream_time_based,
-};
+pub use buffer::StreamingBuffer;
+pub use sse_handler::SseHandler;

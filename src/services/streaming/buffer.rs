@@ -1,160 +1,133 @@
-//! Token buffer for smooth streaming output (simplified version)
+//! Unified streaming buffer for all output (model generation and commands)
 
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc::Sender;
+use crate::types::events::StreamEvent;
 
-/// Configuration for the streaming buffer
-#[derive(Clone, Debug)]
-pub struct StreamBufferConfig {
-    /// Maximum time to hold tokens before flushing (milliseconds)
-    pub flush_interval_ms: u64,
-    /// Minimum tokens to accumulate before considering a flush
-    pub min_tokens_for_flush: usize,
-    /// Flush on punctuation marks for natural breaks
-    pub flush_on_punctuation: bool,
-    /// Flush on complete words (spaces)
-    pub flush_on_word_boundary: bool,
-}
-
-impl Default for StreamBufferConfig {
-    fn default() -> Self {
-        Self {
-            flush_interval_ms: 150,
-            min_tokens_for_flush: 2,
-            flush_on_punctuation: true,
-            flush_on_word_boundary: true,
-        }
-    }
-}
-
-/// Simple token buffer
-pub struct TokenStreamBuffer {
-    config: StreamBufferConfig,
-    buffer: String,
+/// Streaming buffer that accumulates content and flushes based on thresholds
+pub struct StreamingBuffer {
+    session_id: String,
+    buffer: Vec<String>,
+    token_threshold: usize,
+    time_threshold: Duration,
     last_flush: Instant,
-    token_count: usize,
+    sender: Sender<StreamEvent>,
 }
 
-impl TokenStreamBuffer {
-    pub fn new(config: StreamBufferConfig) -> Self {
+impl StreamingBuffer {
+    /// Create a new streaming buffer
+    pub fn new(session_id: String, sender: Sender<StreamEvent>) -> Self {
         Self {
-            config,
-            buffer: String::new(),
+            session_id,
+            buffer: Vec::new(),
+            token_threshold: 10,  // Flush after 10 tokens
+            time_threshold: Duration::from_millis(100),  // Or after 100ms
             last_flush: Instant::now(),
-            token_count: 0,
+            sender,
         }
     }
     
-    pub fn add_token(&mut self, token: &str) -> Option<String> {
-        self.buffer.push_str(token);
-        self.token_count += 1;
+    /// Create with custom thresholds
+    pub fn with_thresholds(
+        session_id: String,
+        sender: Sender<StreamEvent>,
+        token_threshold: usize,
+        time_threshold: Duration,
+    ) -> Self {
+        Self {
+            session_id,
+            buffer: Vec::new(),
+            token_threshold,
+            time_threshold,
+            last_flush: Instant::now(),
+            sender,
+        }
+    }
+    
+    /// Add content to buffer (from model OR command)
+    pub async fn push(&mut self, content: &str) -> Result<(), Box<dyn std::error::Error>> {
+        self.buffer.push(content.to_string());
         
+        // Check if should flush
         if self.should_flush() {
-            return self.flush();
+            self.flush().await?;
         }
         
-        None
+        Ok(())
     }
     
+    /// Check if buffer should be flushed
     fn should_flush(&self) -> bool {
-        if self.last_flush.elapsed() >= Duration::from_millis(self.config.flush_interval_ms) {
-            return true;
+        self.buffer.len() >= self.token_threshold ||
+        self.last_flush.elapsed() >= self.time_threshold
+    }
+    
+    /// Flush buffered content
+    pub async fn flush(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.buffer.is_empty() { 
+            return Ok(()); 
         }
         
-        if self.buffer.is_empty() {
-            return false;
+        // Join buffered content
+        let content = self.buffer.join("");
+        self.buffer.clear();
+        self.last_flush = Instant::now();
+        
+        // Send via session event stream
+        self.sender.send(StreamEvent::Content(content)).await?;
+        
+        Ok(())
+    }
+    
+    /// Complete the stream
+    pub async fn complete(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Flush any remaining content
+        self.flush().await?;
+        
+        // Send completion event
+        self.sender.send(StreamEvent::Complete).await?;
+        
+        Ok(())
+    }
+    
+    /// Force flush with timeout check
+    pub async fn flush_if_timeout(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.buffer.is_empty() && self.last_flush.elapsed() >= self.time_threshold {
+            self.flush().await?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    
+    #[tokio::test]
+    async fn test_buffer_token_threshold() {
+        let (tx, mut rx) = mpsc::channel(10);
+        let mut buffer = StreamingBuffer::new("test".to_string(), tx);
+        
+        // Add tokens below threshold
+        for i in 0..9 {
+            buffer.push(&format!("token{} ", i)).await.unwrap();
         }
         
-        if self.token_count < self.config.min_tokens_for_flush {
-            return false;
-        }
+        // Should not have flushed yet
+        assert!(rx.try_recv().is_err());
         
-        if self.config.flush_on_punctuation {
-            if self.buffer.chars().any(|c| ".!?,;:".contains(c)) {
-                return true;
+        // Add one more to hit threshold
+        buffer.push("token10 ").await.unwrap();
+        
+        // Should have flushed
+        let event = rx.recv().await.unwrap();
+        match event {
+            StreamEvent::Content(content) => {
+                assert!(content.contains("token0"));
+                assert!(content.contains("token9"));
             }
-        }
-        
-        if self.config.flush_on_word_boundary {
-            if self.buffer.ends_with(' ') || self.buffer.ends_with('\n') {
-                return true;
-            }
-        }
-        
-        false
-    }
-    
-    pub fn flush(&mut self) -> Option<String> {
-        if !self.buffer.is_empty() {
-            let content = self.buffer.clone();
-            self.buffer.clear();
-            self.token_count = 0;
-            self.last_flush = Instant::now();
-            return Some(content);
-        }
-        None
-    }
-    
-    pub fn flush_remaining(&mut self) -> Option<String> {
-        self.flush()
-    }
-}
-
-/// Simple word buffer
-pub struct WordBuffer {
-    partial_word: String,
-    flush_interval: Duration,
-    last_flush: Instant,
-}
-
-impl WordBuffer {
-    pub fn new(flush_interval_ms: u64) -> Self {
-        Self {
-            partial_word: String::new(),
-            flush_interval: Duration::from_millis(flush_interval_ms),
-            last_flush: Instant::now(),
-        }
-    }
-    
-    pub fn process_token(&mut self, token: &str) -> Option<String> {
-        self.partial_word.push_str(token);
-        
-        let should_flush = self.partial_word.contains(' ') 
-            || self.partial_word.contains('\n')
-            || self.last_flush.elapsed() >= self.flush_interval;
-        
-        if should_flush && !self.partial_word.is_empty() {
-            let content = self.partial_word.clone();
-            self.partial_word.clear();
-            self.last_flush = Instant::now();
-            return Some(content);
-        }
-        
-        None
-    }
-    
-    pub fn flush_remaining(&mut self) -> Option<String> {
-        if !self.partial_word.is_empty() {
-            let content = self.partial_word.clone();
-            self.partial_word.clear();
-            return Some(content);
-        }
-        None
-    }
-}
-
-/// Simplified HTMX stream processor
-pub struct HtmxStreamProcessor {
-    pub message_id: String,
-    pub buffer: TokenStreamBuffer,
-    pub accumulated_content: String,
-}
-
-impl HtmxStreamProcessor {
-    pub fn new(message_id: String, config: StreamBufferConfig) -> Self {
-        Self {
-            message_id,
-            buffer: TokenStreamBuffer::new(config),
-            accumulated_content: String::new(),
+            _ => panic!("Expected Content event"),
         }
     }
 }
