@@ -89,12 +89,9 @@
     <!-- Load slash commands module -->
     <script src="/static/js/slash-commands.js"></script>
     
-    <!-- HTMX SSE Processing with minimal JS -->
+    <!-- HTMX SSE Processing - Simplified without accumulation -->
     <script>
         console.log('[SmolLM3] Chat initialized with session: {{ session_id }}');
-        
-        // Message buffers for accumulation
-        const messageBuffers = new Map();
         
         // Configure marked
         marked.setOptions({ 
@@ -123,28 +120,23 @@
                 // Find message element
                 const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
                 if (messageEl) {
-                    // Remove loading indicator
+                    // Remove loading indicator on first content
                     const loading = messageEl.querySelector('.loading');
                     if (loading) loading.remove();
                     
-                    // Accumulate content
-                    if (!messageBuffers.has(messageId)) {
-                        messageBuffers.set(messageId, '');
-                    }
-                    messageBuffers.set(messageId, messageBuffers.get(messageId) + content);
-                    
-                    // Display plain text while streaming
-                    messageEl.textContent = messageBuffers.get(messageId);
+                    // Just append content directly - backend already handles buffering
+                    messageEl.textContent = (messageEl.textContent || '') + content;
                 }
             } else if (eventType === 'complete') {
                 // Render markdown on completion
                 const messageId = data;
                 const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
                 
-                if (messageEl && messageBuffers.has(messageId)) {
-                    const rawContent = messageBuffers.get(messageId);
-                    messageEl.innerHTML = marked.parse(rawContent);
-                    messageBuffers.delete(messageId);
+                if (messageEl) {
+                    // Get the final accumulated text from the element
+                    const finalText = messageEl.textContent;
+                    // Render markdown and update
+                    messageEl.innerHTML = marked.parse(finalText);
                 }
             } else if (eventType === 'message-error') {
                 // Handle errors
@@ -154,7 +146,6 @@
                 
                 if (messageEl) {
                     messageEl.innerHTML = `<div class="error-message">Error: ${error}</div>`;
-                    messageBuffers.delete(messageId);
                 }
             }
             
