@@ -36,7 +36,7 @@ pub async fn send_message(
     let message_id = Uuid::now_v7().to_string();
     tracing::info!("Received message: '{}' for session: {}", msg.message, msg.session_id);
     
-    // Return HTML without SSE connection (using existing persistent connection)
+    // Return HTML with proper structure for SSE streaming
     let html = format!(
         r#"<div class="message user">
             <div class="message-bubble">{}</div>
@@ -44,9 +44,11 @@ pub async fn send_message(
         <div class="message assistant" id="msg-{}">
             <div class="message-bubble">
                 <span class="loading">Thinking...</span>
+                <div id="msg-{}-content" style="display:inline;"></div>
             </div>
         </div>"#,
         html_escape::encode_text(&msg.message),
+        message_id,
         message_id
     );
     
@@ -55,6 +57,8 @@ pub async fn send_message(
     let message = msg.message.clone();
     let state_clone = state.clone();
     let msg_id = message_id.clone();
+    
+    tracing::info!("Will send events to session: {} for message: {}", session_id, msg_id);
     
     // Handle command or model generation in background
     tokio::spawn(async move {
@@ -106,29 +110,31 @@ pub async fn stream_session(
         .map(|event| {
             let sse_event = match event {
                 StreamEvent::MessageContent { message_id, content } => {
-                    tracing::info!("Formatting message event: {}|{}", message_id, content);
-                    // Send raw text/markdown - NO HTML escaping
+                    tracing::info!("Streaming content for message: {}", message_id);
+                    // Send HTML with OOB swap to append to specific message content div
                     Event::default()
                         .event("message")
                         .data(format!(
-                            "{}|{}",
+                            r#"<span hx-swap-oob="beforeend:#msg-{}-content">{}</span>"#,
                             message_id,
-                            content  // Raw content, no escaping
+                            html_escape::encode_text(&content)
                         ))
                 }
                 StreamEvent::MessageComplete { message_id } => {
-                    tracing::info!("Formatting complete event: {}", message_id);
+                    tracing::info!("Message complete for: {}", message_id);
+                    // Send a simple complete event with just the message ID
                     Event::default()
                         .event("complete")
                         .data(message_id)
                 }
                 StreamEvent::MessageError { message_id, error } => {
-                    tracing::info!("Formatting error event: {}|{}", message_id, error);
+                    tracing::info!("Formatting error event with OOB swap: {}", message_id);
                     Event::default()
                         .event("message-error")
                         .data(format!(
-                            "{}|{}",
-                            message_id, error
+                            r#"<div id="msg-{}-content" hx-swap-oob="innerHTML"><div class="error-message">Error: {}</div></div>"#,
+                            message_id, 
+                            html_escape::encode_text(&error)
                         ))
                 }
                 // Legacy events for compatibility

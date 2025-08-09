@@ -1,159 +1,191 @@
-// SmolLM3 Chat Application JavaScript
+// Chat functionality - handles SSE events and markdown rendering
 
-// Initialize HTMX SSE extension
-document.addEventListener('DOMContentLoaded', function() {
-    console.log('SmolLM3 Chat initialized');
+// Configure marked for markdown parsing
+marked.setOptions({ 
+    breaks: true, 
+    gfm: true, 
+    sanitize: false 
+});
+
+// Track connection state
+let sseConnectionActive = false;
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+
+// Listen for SSE connection events
+document.addEventListener('htmx:sseOpen', function(e) {
+    console.log('[SSE] Connection opened');
+    sseConnectionActive = true;
+    reconnectAttempts = 0;
+    updateConnectionStatus('connected');
+});
+
+document.addEventListener('htmx:sseError', function(e) {
+    console.error('[SSE] Connection error:', e);
+    sseConnectionActive = false;
+    updateConnectionStatus('error');
     
-    // Handle SSE events
-    document.body.addEventListener('htmx:sseMessage', function(evt) {
-        handleSSEMessage(evt.detail);
-    });
-    
-    // Handle form submissions
-    const chatForm = document.getElementById('chat-form');
-    if (chatForm) {
-        chatForm.addEventListener('htmx:afterRequest', function() {
-            // Clear input after successful submission
-            const input = chatForm.querySelector('input[name="message"]');
-            if (input) input.value = '';
-        });
-    }
-    
-    // Handle thinking mode toggle
-    const thinkingToggle = document.getElementById('thinking-toggle');
-    if (thinkingToggle) {
-        thinkingToggle.addEventListener('change', function() {
-            toggleThinkingMode(this.checked);
-        });
+    // Handle reconnection with exponential backoff
+    if (reconnectAttempts < maxReconnectAttempts) {
+        const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+        console.log(`[SSE] Reconnecting in ${delay}ms (attempt ${reconnectAttempts + 1}/${maxReconnectAttempts})`);
+        reconnectAttempts++;
+        
+        setTimeout(() => {
+            // HTMX SSE extension should auto-reconnect
+            // If not, we may need to manually trigger
+            if (!sseConnectionActive) {
+                console.log('[SSE] Attempting reconnection...');
+                // The SSE extension handles reconnection automatically
+            }
+        }, delay);
+    } else {
+        updateConnectionStatus('failed');
+        console.error('[SSE] Max reconnection attempts reached');
     }
 });
 
-// Handle SSE messages
-function handleSSEMessage(detail) {
-    const data = JSON.parse(detail.data);
-    const messageId = data.message_id;
+document.addEventListener('htmx:sseClose', function(e) {
+    console.log('[SSE] Connection closed');
+    sseConnectionActive = false;
+    updateConnectionStatus('disconnected');
+});
+
+// Update connection status indicator
+function updateConnectionStatus(status) {
+    const statusBadge = document.querySelector('.status-badge');
+    if (!statusBadge) return;
     
-    switch(detail.type) {
-        case 'thinking_start':
-            showThinkingIndicator(messageId);
-            break;
-        case 'thinking':
-            appendThinkingContent(messageId, data.content);
-            break;
-        case 'thinking_end':
-            hideThinkingIndicator(messageId);
-            break;
-        case 'token':
-            appendToken(messageId, data.content);
-            break;
-        case 'done':
-            markMessageComplete(messageId);
+    switch(status) {
+        case 'connected':
+            statusBadge.textContent = '🟢 Connected';
+            statusBadge.style.color = 'var(--success-color, #10b981)';
             break;
         case 'error':
-            handleError(messageId, data.error);
+            statusBadge.textContent = '🟡 Reconnecting...';
+            statusBadge.style.color = 'var(--warning-color, #f59e0b)';
+            break;
+        case 'disconnected':
+            statusBadge.textContent = '🔴 Disconnected';
+            statusBadge.style.color = 'var(--error-color, #ef4444)';
+            break;
+        case 'failed':
+            statusBadge.textContent = '⚠️ Connection Failed';
+            statusBadge.style.color = 'var(--error-color, #ef4444)';
+            // Show user a message to refresh the page
+            showErrorMessage('Connection lost. Please refresh the page to reconnect.');
             break;
     }
 }
 
-// Show thinking indicator
-function showThinkingIndicator(messageId) {
-    const container = document.querySelector(`[data-message-id="${messageId}"]`);
-    if (container) {
-        const indicator = document.createElement('div');
-        indicator.className = 'thinking-indicator';
-        indicator.innerHTML = '🤔 Thinking...';
-        container.appendChild(indicator);
+// Show error message to user
+function showErrorMessage(message) {
+    const messages = document.getElementById('chat-messages');
+    if (messages) {
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'system-message error';
+        errorDiv.innerHTML = `
+            <div class="message-bubble">
+                <strong>System:</strong> ${message}
+                <button onclick="location.reload()" style="margin-left: 10px; padding: 5px 10px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                    Refresh Page
+                </button>
+            </div>
+        `;
+        messages.appendChild(errorDiv);
+        messages.scrollTop = messages.scrollHeight;
     }
 }
 
-// Append thinking content
-function appendThinkingContent(messageId, content) {
-    const container = document.querySelector(`[data-message-id="${messageId}"] .thinking-content`);
-    if (container) {
-        container.innerHTML += content;
-    }
-}
-
-// Hide thinking indicator
-function hideThinkingIndicator(messageId) {
-    const indicator = document.querySelector(`[data-message-id="${messageId}"] .thinking-indicator`);
-    if (indicator) {
-        indicator.innerHTML = '✨ Reasoning complete';
-        setTimeout(() => indicator.style.display = 'none', 1000);
-    }
-}
-
-// Append token to message
-function appendToken(messageId, token) {
-    const container = document.querySelector(`[data-message-id="${messageId}"] .message-text`);
-    if (container) {
-        container.innerHTML += token;
-        // Auto-scroll to bottom
-        const chatMessages = document.querySelector('.chat-messages');
-        if (chatMessages) {
-            chatMessages.scrollTop = chatMessages.scrollHeight;
+// Listen for SSE complete events to render markdown
+document.addEventListener('sse:complete', function(e) {
+    // Get the message ID from the event data
+    const messageId = e.detail?.data || e.data;
+    if (!messageId) return;
+    
+    console.log('[Markdown] Rendering for message:', messageId);
+    
+    // Find the content div for this message
+    const contentDiv = document.querySelector(`#msg-${messageId}-content`);
+    if (contentDiv && contentDiv.textContent) {
+        // Remove loading indicator from parent bubble
+        const bubble = contentDiv.parentElement;
+        const loading = bubble.querySelector('.loading');
+        if (loading) loading.remove();
+        
+        // Get the raw text and render as markdown
+        const rawText = contentDiv.textContent;
+        contentDiv.innerHTML = marked.parse(rawText);
+        
+        // Auto-scroll to show new content
+        const messages = document.getElementById('chat-messages');
+        if (messages) {
+            messages.scrollTop = messages.scrollHeight;
         }
     }
-}
+});
 
-// Mark message as complete
-function markMessageComplete(messageId) {
-    const container = document.querySelector(`[data-message-id="${messageId}"]`);
-    if (container) {
-        container.classList.add('complete');
-        // Enable input for next message
-        const input = document.querySelector('#chat-form input[name="message"]');
-        if (input) input.disabled = false;
+// Remove loading indicators when content starts streaming
+document.addEventListener('htmx:oobAfterSwap', function(e) {
+    if (e.detail && e.detail.target) {
+        const parent = e.detail.target.parentElement;
+        if (parent) {
+            const loading = parent.querySelector('.loading');
+            if (loading) {
+                loading.remove();
+            }
+        }
     }
-}
+});
 
-// Handle errors
-function handleError(messageId, error) {
-    const container = document.querySelector(`[data-message-id="${messageId}"]`);
-    if (container) {
-        container.classList.add('error');
-        const errorDiv = document.createElement('div');
-        errorDiv.className = 'error-message';
-        errorDiv.textContent = `Error: ${error}`;
-        container.appendChild(errorDiv);
-    }
-}
-
-// Toggle thinking mode
-function toggleThinkingMode(enabled) {
-    // Send request to server to update session
-    fetch('/api/toggle-thinking', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ enabled: enabled })
+// Auto-resize textarea as user types
+const messageInput = document.getElementById('message-input');
+if (messageInput) {
+    messageInput.addEventListener('input', function() {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
     
-    // Update UI indicator
-    const indicator = document.querySelector('.thinking-mode-status');
-    if (indicator) {
-        indicator.textContent = enabled ? 'Thinking Mode: ON' : 'Thinking Mode: OFF';
-    }
+    // Submit on Enter (without Shift)
+    messageInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            
+            // Check if connection is active before submitting
+            if (!sseConnectionActive) {
+                showErrorMessage('Connection lost. Please refresh the page to send messages.');
+                return;
+            }
+            
+            document.getElementById('chat-form').requestSubmit();
+        }
+    });
 }
 
-// Utility function to copy message content
-function copyMessage(messageId) {
-    const content = document.querySelector(`[data-message-id="${messageId}"] .message-text`);
-    if (content) {
-        navigator.clipboard.writeText(content.textContent)
-            .then(() => {
-                // Show feedback
-                const btn = event.target;
-                const originalText = btn.textContent;
-                btn.textContent = '✓ Copied';
-                setTimeout(() => btn.textContent = originalText, 2000);
-            });
+// Form cleanup after submission
+document.body.addEventListener('htmx:afterRequest', function(evt) {
+    if (evt.detail && evt.detail.elt && evt.detail.elt.id === 'chat-form') {
+        const messageInput = document.getElementById('message-input');
+        if (messageInput) {
+            messageInput.value = '';
+            messageInput.style.height = 'auto';
+            messageInput.focus();
+        }
     }
-}
+});
 
-// Utility function to regenerate response
-function regenerateResponse(messageId) {
-    // Implementation for regenerating a response
-    console.log('Regenerating response for:', messageId);
-}
+// Auto-scroll when new messages are added
+document.body.addEventListener('htmx:afterSwap', function(evt) {
+    if (evt.detail && evt.detail.target && evt.detail.target.id === 'chat-messages') {
+        const messages = document.getElementById('chat-messages');
+        if (messages) {
+            messages.scrollTop = messages.scrollHeight;
+        }
+    }
+});
+
+// Handle beforeunload to clean up SSE connection
+window.addEventListener('beforeunload', function(e) {
+    console.log('[SSE] Page unloading, connection will close');
+    // The SSE connection will be closed automatically
+});

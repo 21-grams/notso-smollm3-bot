@@ -13,8 +13,12 @@
     <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
     <!-- Markdown parser -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Chat functionality -->
+    <script src="/static/js/chat.js" defer></script>
+    <!-- Slash commands -->
+    <script src="/static/js/slash-commands.js" defer></script>
 </head>
-<body hx-ext="sse">
+<body>
     <div class="chat-container">
         
         <div class="chat-header">
@@ -25,10 +29,10 @@
             </div>
         </div>
         
-        <!-- Chat messages container with SSE connection -->
-        <div class="chat-messages" id="chat-messages" 
-             sse-connect="/api/stream/{{ session_id }}"
-             sse-swap="message,complete,message-error">
+        <!-- Chat messages container with SSE connection using extension -->
+        <div class="chat-messages" id="chat-messages"
+             hx-ext="sse"
+             sse-connect="/api/stream/{{ session_id }}">
             
             <!-- Initial greeting -->
             <div class="message assistant">
@@ -36,11 +40,11 @@
                     Hello! I'm SmolLM3, ready to help. How can I assist you today?
                 </div>
             </div>
-        </div>
-        
-        <!-- Simple status display -->
-        <div class="status-display" id="status-display" style="display: none;">
-            <span class="status-text">Generating...</span>
+            
+            <!-- SSE swap targets (hidden) -->
+            <div sse-swap="message" style="display:none;"></div>
+            <div sse-swap="complete" style="display:none;"></div>
+            <div sse-swap="message-error" style="display:none;"></div>
         </div>
         
         <div class="chat-input">
@@ -69,7 +73,6 @@
                   hx-swap="beforeend">
                 <input type="hidden" name="session_id" value="{{ session_id }}">
                 
-                <!-- Input wrapper for positioning and flex growth -->
                 <div class="input-wrapper">
                     <textarea 
                            name="message" 
@@ -78,132 +81,11 @@
                            required
                            autofocus
                            rows="1"></textarea>
-                    <!-- Slash command menu will be inserted here by JS -->
                 </div>
                 
                 <button type="submit" id="send-button">Send</button>
             </form>
         </div>
     </div>
-    
-    <!-- Load slash commands module -->
-    <script src="/static/js/slash-commands.js"></script>
-    
-    <!-- HTMX SSE Processing - Simplified without accumulation -->
-    <script>
-        console.log('[SmolLM3] Chat initialized with session: {{ session_id }}');
-        
-        // Configure marked
-        marked.setOptions({ 
-            breaks: true, 
-            gfm: true, 
-            sanitize: false 
-        });
-        
-        // Intercept HTMX SSE events before swap
-        document.body.addEventListener('htmx:sseBeforeMessage', function(e) {
-            // Prevent default HTMX swap
-            e.preventDefault();
-            
-            const event = e.detail;
-            const eventType = event.type;
-            const data = event.data;
-            
-            if (eventType === 'message') {
-                // Parse messageId|content
-                const separatorIndex = data.indexOf('|');
-                if (separatorIndex === -1) return;
-                
-                const messageId = data.substring(0, separatorIndex);
-                const content = data.substring(separatorIndex + 1);
-                
-                // Find message element
-                const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
-                if (messageEl) {
-                    // Remove loading indicator on first content
-                    const loading = messageEl.querySelector('.loading');
-                    if (loading) loading.remove();
-                    
-                    // Just append content directly - backend already handles buffering
-                    messageEl.textContent = (messageEl.textContent || '') + content;
-                }
-            } else if (eventType === 'complete') {
-                // Render markdown on completion
-                const messageId = data;
-                const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
-                
-                if (messageEl) {
-                    // Get the final accumulated text from the element
-                    const finalText = messageEl.textContent;
-                    // Render markdown and update
-                    messageEl.innerHTML = marked.parse(finalText);
-                }
-            } else if (eventType === 'message-error') {
-                // Handle errors
-                const [messageId, ...errorParts] = data.split('|');
-                const error = errorParts.join('|');
-                const messageEl = document.querySelector(`#msg-${messageId} .message-bubble`);
-                
-                if (messageEl) {
-                    messageEl.innerHTML = `<div class="error-message">Error: ${error}</div>`;
-                }
-            }
-            
-            // Auto-scroll
-            const messages = document.getElementById('chat-messages');
-            messages.scrollTop = messages.scrollHeight;
-        });
-        
-        // Connection status
-        document.body.addEventListener('htmx:sseOpen', function(e) {
-            console.log('[HTMX SSE] Connected');
-            updateStatus('🟢 Connected');
-        });
-        
-        document.body.addEventListener('htmx:sseError', function(e) {
-            console.log('[HTMX SSE] Error');
-            updateStatus('🔴 Disconnected');
-        });
-        
-        function updateStatus(text) {
-            const badge = document.querySelector('.status-badge');
-            if (badge && !badge.textContent.includes('Model')) {
-                badge.textContent = text;
-            }
-        }
-        
-        // Auto-resize textarea
-        const messageInput = document.getElementById('message-input');
-        if (messageInput) {
-            messageInput.addEventListener('input', function() {
-                this.style.height = 'auto';
-                this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-            });
-            
-            messageInput.addEventListener('keydown', function(e) {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    document.getElementById('chat-form').requestSubmit();
-                }
-            });
-        }
-        
-        // Form cleanup
-        document.body.addEventListener('htmx:afterRequest', function(evt) {
-            if (evt.detail.elt?.id === 'chat-form' && messageInput) {
-                messageInput.value = '';
-                messageInput.style.height = 'auto';
-                messageInput.focus();
-            }
-        });
-        
-        // Auto-scroll
-        document.body.addEventListener('htmx:afterSwap', function(evt) {
-            if (evt.detail.target.id === 'chat-messages') {
-                const messages = document.getElementById('chat-messages');
-                messages.scrollTop = messages.scrollHeight;
-            }
-        });
-    </script>
 </body>
 </html>
