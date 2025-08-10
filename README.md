@@ -143,14 +143,14 @@ cargo build --release --features cuda
 - [ ] Basic tokenizer loading
 - [ ] Model loading with QMatMul
 
-### Phase 2: Features (Week 1-2)
+### Phase 2: Features
 - [ ] Chat template application
 - [ ] Generation loop
 - [ ] Thinking mode (`<think>` tokens)
 - [ ] KV cache for conversations
 - [ ] Batch tokenization
 
-### Phase 3: Optimization (Week 3)
+### Phase 3: Optimization
 - [ ] CUDA acceleration
 - [ ] 128K context support
 - [ ] Performance tuning
@@ -200,15 +200,6 @@ for _ in 0..max_tokens {
 // Decode once
 let output = tokenizer.decode(&token_buffer)?;
 ```
-
-## 📈 Performance Metrics
-
-| Metric | Target | Current | Status |
-|--------|--------|---------|--------|
-| Token Speed | 1-2 tok/s | N/A | ❌ |
-| Memory Usage | <4GB | ~500MB | ⚠️ |
-| Context Length | 128K | N/A | ❌ |
-| Quantization | Q4_K_M | N/A | ❌ |
 
 ## 🐛 Known Issues
 
