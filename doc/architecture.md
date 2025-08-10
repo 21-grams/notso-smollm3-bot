@@ -1,411 +1,260 @@
-# Complete System Architecture & Call Chains
+# System Architecture
 
-## Table of Contents
-1. [Server Startup Call Chain](#server-startup-call-chain)
-2. [Inference Engine Call Chain](#inference-engine-call-chain)
-3. [UI Input/Output Call Chain](#ui-inputoutput-call-chain)
-4. [Broadcast SSE Architecture](#broadcast-sse-architecture)
-5. [Error Handling & Fallback Chains](#error-handling--fallback-chains)
+## Overview
 
----
+SmolLM3 Bot implements a three-tier architecture with clean separation between official Candle.rs operations, SmolLM3-specific features, and web infrastructure.
 
-## Server Startup Call Chain
+## Architecture Layers
 
-### Complete Startup Sequence
+### Layer 1: Official Candle (`/official`)
+Pure Candle.rs implementations using only documented APIs.
 
 ```
-main.rs::main()
-│
-├── tracing_subscriber::registry()
-│   └── .with(EnvFilter::try_from_default_env())
-│   └── .with(fmt::layer())
-│   └── .init()
-│
-├── tracing::info!("🚀 Starting SmolLM3 Bot Server")
-│
-├── AppState::new().await?
-│   │
-│   ├── Config::from_env()?
-│   │   ├── Read HOST (default: "127.0.0.1")
-│   │   ├── Read PORT (default: "3000")
-│   │   ├── Read MODEL_PATH (default: "models/SmolLM3-3B-Q4_K_M.gguf")
-│   │   ├── Read TOKENIZER_PATH (default: "models/tokenizer.json")
-│   │   └── Set device: DeviceConfig::Cpu
-│   │
-│   ├── MLService::new() [OPTIONAL - Non-blocking]
-│   │   │
-│   │   ├── SmolLM3Model::from_gguf(model_path, &device)?
-│   │   │   ├── gguf_file::Content::read(&mut file)?
-│   │   │   ├── Load metadata and tensors
-│   │   │   ├── Initialize quantized weights
-│   │   │   └── Return SmolLM3Model
-│   │   │
-│   │   ├── SmolLM3Tokenizer::from_file(tokenizer_path)?
-│   │   │   ├── Read tokenizer.json
-│   │   │   ├── Parse vocabulary
-│   │   │   └── Setup special tokens
-│   │   │
-│   │   ├── SmolLM3KVCache::new(num_layers, max_seq_len, device)
-│   │   │   └── Initialize empty cache layers
-│   │   │
-│   │   └── LogitsProcessor::new(seed, temperature, top_p)
-│   │
-│   ├── [On MLService Error]
-│   │   ├── tracing::warn!("⚠️ Model not available: {}", e)
-│   │   ├── tracing::info!("🌐 Server will start without model")
-│   │   └── Set model = None
-│   │
-│   ├── TemplateEngine::new()?
-│   │   └── Initialize MiniJinja templates
-│   │
-│   └── Return AppState {
-│       config: Arc::new(config),
-│       model: Arc::new(RwLock::new(ml_service)), // Option<MLService>
-│       sessions: Arc::new(RwLock::new(SessionManager::new())),
-│       templates: Arc::new(templates),
-│   }
-│
-└── web::start_server(state).await?
-    │
-    ├── let app = create_app(state.clone())
-    │   │
-    │   ├── Router::new()
-    │   │   ├── .route("/", get(handlers::chat::index))
-    │   │   ├── .route("/api/chat", post(handlers::api::send_message))
-    │   │   ├── .route("/api/stream/{session_id}", get(handlers::api::stream_session))
-    │   │   ├── .route("/api/toggle-thinking", post(handlers::api::toggle_thinking))
-    │   │   ├── .route("/test-sse", get(handlers::api::test_sse))
-    │   │   └── ... (other routes)
-    │   │
-    │   ├── .nest_service("/static", ServeDir::new("src/web/static"))
-    │   │
-    │   └── .layer(ServiceBuilder::new()
-    │       ├── .layer(CorsLayer::permissive())
-    │       └── .layer(TraceLayer::new_for_http()))
-    │
-    ├── let addr = SocketAddr::from(([0, 0, 0, 0], state.config.port))
-    │
-    ├── tracing::info!("🌐 Server listening on http://{}", addr)
-    │
-    └── axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await?
+src/services/ml/official/
+├── gguf_loader.rs         # GGUF file parsing and metadata mapping
+├── model.rs               # Wraps candle_transformers::models::quantized_llama
+├── quantized_model.rs     # Direct QMatMul operations for Q4_K_M
+├── config.rs              # LlamaConfig with SmolLM3 parameters
+└── device.rs              # CUDA/CPU device management
 ```
 
----
+**Key Responsibilities:**
+- Load GGUF files with metadata mapping
+- Use `ModelWeights::from_gguf()` directly
+- Implement QMatMul operations without dequantization
+- Manage device allocation
 
-## Inference Engine Call Chain
-
-### Model Generation Flow (When Model Available)
-
-```
-generate_response_buffered(state, session_id, message, message_id)
-│
-├── Get broadcast sender
-│   └── sessions.get_or_create_sender(&session_id)
-│       ├── Check if session exists
-│       ├── If not: broadcast::channel(100)
-│       └── Return sender clone
-│
-├── StreamingBuffer::new(sender, message_id)
-│   └── Initialize with empty buffer
-│
-├── Check model availability
-│   └── state.model.read().await
-│
-└── If Some(service):
-    │
-    └── service.generate_streaming(&message, &mut buffer).await
-        │
-        ├── tokenizer.encode(prompt)?
-        │   ├── Convert prompt to tokens
-        │   └── Return Vec<u32>
-        │
-        ├── Prepare input tensor
-        │   └── Tensor::new(tokens, &device)?.unsqueeze(0)?
-        │
-        └── Generation loop (max_tokens iterations)
-            │
-            ├── model.forward_with_cache(&input_ids)?
-            │   ├── Embedding lookup
-            │   ├── Through transformer layers:
-            │   │   ├── RMSNorm
-            │   │   ├── Self-Attention (with GQA)
-            │   │   ├── KV Cache update
-            │   │   ├── Position encoding (skip on NoPE layers)
-            │   │   ├── Feed-forward network
-            │   │   └── Residual connections
-            │   └── Output logits
-            │
-            ├── logits_processor.sample(&last_logits)?
-            │   ├── Apply temperature
-            │   ├── Apply top_p
-            │   └── Sample token
-            │
-            ├── Check special tokens
-            │   ├── If think_token_id: enter thinking mode
-            │   ├── If think_end_token_id: exit thinking mode
-            │   └── If EOS: break loop
-            │
-            ├── tokenizer.decode(&[next_token])?
-            │
-            └── buffer.push(token_text).await?
-                ├── Accumulate in buffer
-                ├── If 10 tokens OR 500ms elapsed:
-                │   └── flush().await?
-                │       ├── broadcast::send(StreamEvent::MessageContent)
-                │       └── Reset buffer
-                └── Continue
-```
-
-### Fallback Flow (When Model Unavailable)
+### Layer 2: SmolLM3 Extensions (`/smollm3`)
+Model-specific features built on top of official layer.
 
 ```
-If None (no model):
-│
-├── Create fallback message
-│   └── "🔴 **Model not loaded**\n\n..."
-│
-├── tracing::warn!("No model available for message {}", message_id)
-│
-└── Stream fallback word by word
-    │
-    └── For each word in fallback.split_whitespace()
-        ├── buffer.push(&format!("{} ", word)).await?
-        ├── tokio::time::sleep(30ms).await
-        └── Continue until done
+src/services/ml/smollm3/
+├── tokenizer_ext.rs       # Batch tokenization support
+├── chat_template.rs        # External template application
+├── generation.rs          # Token generation with buffering
+├── thinking.rs            # <think> token detection
+├── kv_cache.rs           # 128K context cache management
+├── nope_layers.rs        # Skip position encoding (every 4th layer)
+└── adapter.rs            # Bridge between layers
 ```
 
----
+**Key Responsibilities:**
+- Apply chat templates before inference
+- Handle thinking mode at generation level
+- Manage KV cache for long contexts
+- Implement NoPE layer logic
 
-## UI Input/Output Call Chain
-
-### Complete User Interaction Flow
-
-```
-1. USER INPUT PHASE
-   Browser
-   │
-   ├── User types in <textarea id="message-input">
-   ├── User presses Enter (without Shift)
-   └── JavaScript: document.getElementById('chat-form').requestSubmit()
-
-2. HTMX PROCESSING PHASE
-   HTMX
-   │
-   ├── Intercept form submission
-   ├── Prepare POST request
-   │   ├── URL: /api/chat
-   │   ├── Data: {session_id, message}
-   │   └── Headers: Content-Type: application/x-www-form-urlencoded
-   └── Send async request
-
-3. SERVER RECEPTION PHASE
-   api::send_message()
-   │
-   ├── Extract Form data
-   ├── Generate message_id (UUID v7)
-   ├── Log: "Received message: '{}' for session: {}"
-   │
-   ├── Create immediate HTML response
-   │   └── format!(r#"
-   │       <div class="message user">
-   │           <div class="message-bubble">{escaped_user_message}</div>
-   │       </div>
-   │       <div class="message assistant" id="msg-{message_id}">
-   │           <div class="message-bubble">
-   │               <span class="loading">Thinking...</span>
-   │           </div>
-   │       </div>"#)
-   │
-   ├── Return Html(html) [IMMEDIATE - User sees response]
-   │
-   └── tokio::spawn(async move { ... }) [BACKGROUND TASK]
-
-4. BACKGROUND PROCESSING PHASE
-   Background Task
-   │
-   ├── Check message type
-   │   ├── If starts_with("/quote"): stream_quote_buffered()
-   │   └── Else: generate_response_buffered()
-   │
-   └── Processing continues...
-       [See Inference Engine Call Chain above]
-
-5. EVENT BROADCASTING PHASE
-   StreamingBuffer::flush()
-   │
-   ├── Create StreamEvent::MessageContent
-   ├── broadcast::Sender::send(event)
-   │   └── All subscribers receive copy
-   └── Clear buffer
-
-6. SSE DELIVERY PHASE
-   stream_session() handler
-   │
-   ├── BroadcastStream receives event
-   ├── Map to SSE format
-   │   └── Event::default()
-   │       .event("message")
-   │       .data(format!("{}|{}", message_id, content))
-   └── Send over SSE connection
-
-7. CLIENT RECEPTION PHASE
-   EventSource (Browser)
-   │
-   ├── Receive SSE event
-   ├── JavaScript: eventSource.addEventListener('message', ...)
-   ├── Parse: const [messageId, ...contentParts] = e.data.split('|')
-   └── Update DOM
-       ├── Find: document.querySelector(`#msg-${messageId} .message-bubble`)
-       ├── Store: messageEl.dataset.rawContent += content
-       └── Display: messageEl.textContent = messageEl.dataset.rawContent
-
-8. COMPLETION & RENDERING PHASE
-   On 'complete' event
-   │
-   ├── Get accumulated content: messageEl.dataset.rawContent
-   ├── Render markdown: marked.parse(rawContent)
-   ├── Update HTML: messageEl.innerHTML = formattedHtml
-   └── Auto-scroll to bottom
-```
-
----
-
-## Broadcast SSE Architecture
-
-### Why Broadcast Instead of MPSC
+### Layer 3: Web Infrastructure (`/web`)
+User interface and streaming infrastructure.
 
 ```
-MPSC Problem:
-┌──────────┐      ┌──────────┐      ┌──────────┐
-│ Producer │─────>│ Channel  │─────>│ Consumer │
-└──────────┘      └──────────┘      └──────────┘
-                        ↓
-                  Once taken, gone!
-                  SSE reconnect = lost messages
+src/web/
+├── handlers/             # HTTP request handlers
+├── templates/            # HTML templates
+├── static/              # CSS, JavaScript
+└── routes.rs            # Route configuration
 
-Broadcast Solution:
-┌──────────┐      ┌──────────┐      ┌──────────┐
-│ Producer │─────>│ Broadcast│──┬──>│Consumer 1│
-└──────────┘      │  Channel │  ├──>│Consumer 2│
-                  └──────────┘  └──>│Consumer N│
-                        ↓
-                  Multiple subscribers
-                  Late join = get buffered messages
+src/services/
+├── streaming/           # SSE streaming service
+├── session.rs          # Session management
+└── metrics.rs          # Performance monitoring
 ```
 
-### Implementation Details
+## Data Flow
 
+### 1. Input Processing
+```
+User Input → Chat Template → Tokenizer → Token IDs
+```
+
+### 2. Model Inference
+```
+Token IDs → Official Model → QMatMul Ops → Logits
+```
+
+### 3. Generation Pipeline
+```
+Logits → Sampling → Token Buffer → Decode → Output
+```
+
+### 4. Response Streaming
+```
+Generated Tokens → SSE Stream → HTMX → Browser
+```
+
+## Key Design Patterns
+
+### Direct Quantized Operations
 ```rust
-// Session creation with broadcast
-pub fn create_session(&mut self, session_id: &str) {
-    if !self.sessions.contains_key(session_id) {
-        let (tx, _rx) = broadcast::channel(100); // 100 message buffer
-        
-        let session = SessionState {
-            id: session_id.to_string(),
-            event_sender: tx,
-            // ... other fields
-        };
-        
-        self.sessions.insert(session_id.to_string(), session);
+// All Q4_K_M tensors use QMatMul directly
+pub struct QuantizedLayer {
+    q_attn: QMatMul,  // Attention weights
+    q_ffn: QMatMul,   // Feed-forward weights
+}
+
+impl QuantizedLayer {
+    pub fn forward(&self, input: &Tensor) -> Result<Tensor> {
+        // Direct operation without dequantization
+        self.q_attn.forward(input)
     }
 }
+```
 
-// SSE subscription
-pub fn subscribe(&mut self, session_id: &str) -> Option<broadcast::Receiver<StreamEvent>> {
-    self.sessions.get(session_id)
-        .map(|s| s.event_sender.subscribe()) // New receiver each time
+### Token Buffering
+```rust
+pub struct TokenBuffer {
+    tokens: Vec<u32>,
+    threshold: usize,  // Flush after N tokens
 }
 
-// Broadcasting events
-let _ = sender.send(StreamEvent::MessageContent {
-    message_id,
-    content,
-}); // Non-async, returns Result<usize, SendError>
+impl TokenBuffer {
+    pub fn push(&mut self, token: u32) {
+        self.tokens.push(token);
+        if self.tokens.len() >= self.threshold {
+            self.flush();
+        }
+    }
+    
+    pub fn flush(&mut self) -> String {
+        let output = tokenizer.decode(&self.tokens);
+        self.tokens.clear();
+        output
+    }
+}
 ```
 
-### Race Condition Solution
+### KV Cache with Sliding Window
+```rust
+pub struct ExtendedKVCache {
+    cache: Vec<(Tensor, Tensor)>,
+    max_context: usize,    // 131072
+    window_size: usize,    // 1024
+}
 
-```
-Timeline without broadcast (MPSC):
-T0: User sends message
-T1: Background task starts
-T2: Task sends to channel [MESSAGE LOST - no receiver yet]
-T3: SSE connects
-T4: SSE takes receiver [Too late!]
-
-Timeline with broadcast:
-T0: User sends message
-T1: Background task starts
-T2: Task broadcasts message [BUFFERED in channel]
-T3: SSE connects
-T4: SSE subscribes [RECEIVES buffered message]
-```
-
----
-
-## Error Handling & Fallback Chains
-
-### Model Loading Failure
-
-```
-AppState::new()
-│
-└── MLService::new() returns Err
-    │
-    ├── Log: tracing::warn!("⚠️ Model not available: {}", e)
-    ├── Log: tracing::info!("🌐 Server will start without model")
-    ├── Set: model = None
-    └── Continue startup [SERVER STILL STARTS]
+impl ExtendedKVCache {
+    pub fn update(&mut self, k: Tensor, v: Tensor, position: usize) {
+        // Sliding window for long contexts
+        if position > self.max_context - self.window_size {
+            self.slide_window();
+        }
+        self.cache[position] = (k, v);
+    }
+}
 ```
 
-### Runtime Model Failure
+## Model Specifications
 
+### Tensor Mapping
+
+| Tensor Name | Type | Quantization | Operation |
+|-------------|------|--------------|-----------|
+| `token_embd.weight` | Embedding | F32 | Direct |
+| `layers.*.attn_q.weight` | Attention Q | Q4_K_M | QMatMul |
+| `layers.*.attn_k.weight` | Attention K | Q4_K_M | QMatMul |
+| `layers.*.attn_v.weight` | Attention V | Q4_K_M | QMatMul |
+| `layers.*.attn_out.weight` | Attention Out | Q4_K_M | QMatMul |
+| `layers.*.attn_norm.weight` | Layer Norm | F32 | Direct |
+| `layers.*.ffn_gate.weight` | FFN Gate | Q4_K_M | QMatMul |
+| `layers.*.ffn_down.weight` | FFN Down | Q4_K_M | QMatMul |
+| `layers.*.ffn_up.weight` | FFN Up | Q4_K_M | QMatMul |
+| `layers.*.ffn_norm.weight` | FFN Norm | F32 | Direct |
+| `output.weight` | Output | Q4_K_M | QMatMul |
+| `output_norm.weight` | Output Norm | F32 | Direct |
+
+### Special Features
+
+#### Grouped Query Attention (GQA)
+- 16 attention heads
+- 4 KV heads (4:1 ratio)
+- 75% memory savings
+
+#### NoPE Layers
+- Layers 3, 7, 11, 15, 19, 23, 27, 31, 35
+- Skip position encoding
+- Content-based attention only
+
+#### Thinking Mode
+- Start token: `<think>` (128002)
+- End token: `</think>` (128003)
+- Handled at generation level
+
+## Performance Considerations
+
+### Memory Management
+- Model: ~1.9GB (Q4_K_M)
+- KV Cache: ~2GB (for 128K context)
+- Total: < 4GB target
+
+### Optimization Strategies
+1. **Never dequantize** Q4_K_M tensors
+2. **Buffer tokens** before decoding
+3. **Use sliding window** for long contexts
+4. **Batch operations** when possible
+5. **Reuse tensors** to minimize allocation
+
+### CUDA Acceleration
+```bash
+# Environment setup
+export CUDA_HOME=/usr/local/cuda
+export LD_LIBRARY_PATH=$CUDA_HOME/lib64:$LD_LIBRARY_PATH
+
+# Build with CUDA
+cargo build --release --features cuda
 ```
-generate_response_buffered()
-│
-└── service.generate_streaming() returns Err
-    │
-    ├── Log: tracing::error!("Model generation failed: {}", e)
-    ├── Create error message with markdown
-    ├── Stream fallback through buffer
-    └── User sees: "⚠️ **Model generation failed**..."
+
+## Error Handling
+
+### Graceful Fallbacks
+1. **Model Loading Failure** → Stub mode
+2. **CUDA Unavailable** → CPU inference
+3. **OOM Error** → Reduce context window
+4. **Tokenizer Error** → Default tokens
+
+### Logging Strategy
+```rust
+tracing::info!("🚀 Starting inference");
+tracing::debug!("Token: {} -> {}", id, text);
+tracing::warn!("⚠️ Falling back to CPU");
+tracing::error!("❌ Model loading failed: {}", e);
 ```
 
-### SSE Connection Failure
+## Testing Strategy
 
-```
-EventSource connection drops
-│
-├── Browser: Automatic reconnection attempt
-├── Server: New subscribe() call
-├── Broadcast: New receiver created
-└── Messages: Continue flowing (no loss)
-```
+### Unit Tests
+- GGUF metadata parsing
+- Tokenizer encode/decode
+- QMatMul operations
+- KV cache management
 
-### Buffer Overflow Handling
+### Integration Tests
+- Full inference pipeline
+- Multi-turn conversations
+- Thinking mode toggle
+- Context overflow handling
 
-```
-broadcast::channel(100) fills up
-│
-├── Oldest messages dropped (lagged)
-├── BroadcastStream receives Err(RecvError::Lagged)
-├── Map to StreamEvent::KeepAlive
-└── Continue operation (graceful degradation)
-```
+### Performance Tests
+- Token generation speed
+- Memory usage monitoring
+- Context length scaling
+- Quantization accuracy
 
----
+## Security Considerations
 
-## Summary
+- Input sanitization for chat templates
+- Token limit enforcement
+- Memory bounds checking
+- Session isolation
 
-The architecture demonstrates:
+## Future Extensions
 
-1. **Resilient Startup**: Server always starts, model is optional
-2. **Event-Driven Flow**: From input to display via broadcast channels
-3. **No Message Loss**: Broadcast buffers handle timing issues
-4. **Graceful Degradation**: Fallbacks at every level
-5. **Clean Separation**: Each layer has clear responsibilities
+### Planned Features
+- Batch inference support
+- Streaming tokenization
+- Tool calling integration
+- Multi-model support
 
-The system elegantly handles complex async flows while maintaining simplicity and robustness.
+### Architecture Extensions
+- Plugin system for custom features
+- Distributed inference
+- Model hot-swapping
+- Fine-tuning support

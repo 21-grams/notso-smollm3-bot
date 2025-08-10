@@ -1,173 +1,224 @@
-# SmolLM3 GGUF Integration Status
+# GGUF Integration Status
 
-## Current Status (2025-08-08)
+## Current Status (2025-01-17)
 
-### ✅ What's Working
-1. **Web Server**: Axum server runs successfully
-2. **Routing**: Fixed duplicate route registration issue
-3. **Stub Mode**: Functional stub mode for testing without model
-4. **GGUF Inspection**: Can read and validate GGUF file metadata
-5. **Tokenizer**: Successfully loads from JSON file
-6. **UI/UX**: Chat interface with neumorphic design works
+### Overview
+The SmolLM3 GGUF integration requires proper Q4_K_M tensor loading with direct quantized operations. The main challenge is mapping SmolLM3's metadata structure to Candle's expected format while maintaining quantized operations throughout.
 
-### 🔍 Key Findings
+## Technical Requirements
 
-#### GGUF Metadata Issue
-The SmolLM3 GGUF file (`HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf`) is missing standard Llama metadata keys that Candle expects:
+### Model File
+- **File**: `/models/HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf`
+- **Size**: ~1.9GB (Q4_K_M quantized)
+- **Tensors**: 326 total
+- **Metadata**: 32+ entries
 
-**Missing Keys**:
-- `llama.attention.head_count`
-- `llama.attention.head_count_kv`
-- `llama.block_count`
-- `llama.context_length`
-- `llama.embedding_length`
+### Expected Tensor Types
 
-**What the file has**:
-- 326 tensors
-- 32 metadata entries
-- Architecture information (needs inspection to determine exact format)
-
-### 🚧 Current Challenges
-
-1. **Model Loading**: 
-   - Candle's `ModelWeights::from_gguf` expects Llama-specific metadata
-   - SmolLM3 GGUF uses different metadata structure
-   - Need custom loader or GGUF conversion
-
-2. **Quantized Tensor Loading**:
-   - `QTensor::from_gguf` API needs proper implementation
-   - Tensor data offset and loading logic needs work
-
-3. **Warnings** (127 total):
-   - Unused imports
-   - Unused variables
-   - Dead code
-   - Need systematic cleanup
-
-## 📋 Implementation Plan
-
-### Phase 1: Model Metadata Investigation ✅
-- [x] Create GGUF inspector
-- [x] Identify missing metadata
-- [x] Document findings
-
-### Phase 2: Improved Error Handling (Current)
-- [x] Better error messages for missing metadata
-- [x] Graceful fallback to stub mode
-- [x] Log available metadata keys
-- [ ] Create metadata mapping table
-
-### Phase 3: Custom GGUF Loader
-- [ ] Create SmolLM3-specific metadata parser
-- [ ] Map SmolLM3 keys to expected Llama keys
-- [ ] Implement tensor loading from GGUF
-- [ ] Test with actual model
-
-### Phase 4: Model Integration
-- [ ] Implement proper forward pass
-- [ ] Add KV cache support
-- [ ] Implement sampling strategies
-- [ ] Test generation pipeline
-
-### Phase 5: Cleanup
-- [ ] Fix all warnings
-- [ ] Remove dead code
-- [ ] Optimize imports
-- [ ] Add proper tests
-
-## 🛠️ Immediate Next Steps
-
-1. **Run GGUF inspector** to get full metadata listing:
-   ```bash
-   cargo run --bin inspect_gguf
-   ```
-
-2. **Check HuggingFace model card** for correct metadata format
-
-3. **Consider alternative approaches**:
-   - Use llama.cpp's GGUF converter to add missing metadata
-   - Download a different GGUF variant with proper metadata
-   - Use unquantized model and quantize with Candle
-
-4. **Clean up warnings** to improve code quality:
-   ```bash
-   cargo fix --allow-dirty
-   cargo clippy --fix
-   ```
-
-## 🔧 Potential Solutions
-
-### Option 1: Metadata Injection
-Create a tool to add missing metadata to the GGUF file:
-```rust
-// Add missing metadata based on SmolLM3 architecture
-content.metadata.insert("llama.attention.head_count", Value::U32(32));
-content.metadata.insert("llama.attention.head_count_kv", Value::U32(8));
-content.metadata.insert("llama.block_count", Value::U32(36));
+#### Q4_K_M Quantized (Use QMatMul)
+```
+layers.0-35.attn_q.weight    → Q4_K_M
+layers.0-35.attn_k.weight    → Q4_K_M
+layers.0-35.attn_v.weight    → Q4_K_M
+layers.0-35.attn_out.weight  → Q4_K_M
+layers.0-35.ffn_gate.weight  → Q4_K_M
+layers.0-35.ffn_down.weight  → Q4_K_M
+layers.0-35.ffn_up.weight    → Q4_K_M
+output.weight                → Q4_K_M
 ```
 
-### Option 2: Custom Model Implementation
-Bypass Candle's quantized_llama and implement SmolLM3 directly:
-- Load tensors manually from GGUF
-- Implement forward pass with proper architecture
-- Handle quantization/dequantization
+#### F32 (Not Quantized)
+```
+token_embd.weight            → F32
+layers.0-35.attn_norm.weight → F32
+layers.0-35.ffn_norm.weight  → F32
+output_norm.weight           → F32
+rope_freqs                   → F32
+```
 
-### Option 3: Alternative Model Format
-Use a different model format that Candle supports better:
-- SafeTensors format
-- PyTorch checkpoint conversion
-- ONNX export
+## Implementation Tasks
 
-## 📊 Warnings Analysis
+### 1. GGUF Inspection Tool
+```rust
+// Create tool to inspect GGUF structure
+pub fn inspect_gguf(path: &str) -> Result<GgufReport> {
+    let mut file = File::open(path)?;
+    let content = gguf_file::Content::read(&mut file)?;
+    
+    // Report tensor types
+    for (name, info) in &content.tensor_infos {
+        println!("{}: {:?}", name, info.ggml_dtype);
+    }
+    
+    // Report metadata keys
+    for (key, value) in &content.metadata {
+        println!("{}: {:?}", key, value);
+    }
+}
+```
 
-Based on the 127 warnings, here's the breakdown by priority:
+### 2. Metadata Mapping
 
-### High Priority (Affects functionality)
-- Unused `Result` values that should be handled
-- Missing error propagation
+#### SmolLM3 Keys → Llama Keys
+```rust
+pub fn map_metadata(content: &mut Content) {
+    // Map all possible key variations
+    let mappings = [
+        ("smollm3.attention.head_count", "llama.attention.head_count", 32),
+        ("smollm3.attention.head_count_kv", "llama.attention.head_count_kv", 8),
+        ("smollm3.block_count", "llama.block_count", 36),
+        ("smollm3.context_length", "llama.context_length", 131072),
+        ("smollm3.embedding_length", "llama.embedding_length", 3072),
+        ("smollm3.feed_forward_length", "llama.feed_forward_length", 8192),
+        ("smollm3.vocab_size", "llama.vocab_size", 128256),
+        ("smollm3.rope.theta", "llama.rope.freq_base", 1000000.0),
+    ];
+    
+    for (from, to, default) in mappings {
+        if !content.metadata.contains_key(to) {
+            if let Some(val) = content.metadata.get(from) {
+                content.metadata.insert(to.to_string(), val.clone());
+            } else {
+                // Insert default if not found
+                content.metadata.insert(to.to_string(), default);
+            }
+        }
+    }
+}
+```
 
-### Medium Priority (Code quality)
-- Unused imports (~40% of warnings)
-- Unused variables in function parameters
-- Dead code that's never called
+### 3. Q4_K_M Loading
 
-### Low Priority (Style)
-- Naming conventions
-- Documentation comments
-- Code organization
+#### Verify Q4_K Support
+```rust
+#[test]
+fn test_q4k_support() {
+    use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
+    
+    // Check if Q4_K exists in enum
+    match GgmlDType::Q4K {
+        GgmlDType::Q4K => println!("Q4_K supported!"),
+        _ => panic!("Q4_K not found"),
+    }
+    
+    // Test QMatMul creation
+    // This needs actual tensor data to test properly
+}
+```
 
-## 🎯 Recommended Action Plan
+#### Load with VarBuilder
+```rust
+pub fn load_model(path: &str, device: &Device) -> Result<ModelWeights> {
+    let mut file = File::open(path)?;
+    let mut content = gguf_file::Content::read(&mut file)?;
+    
+    // Apply metadata mapping
+    map_metadata(&mut content);
+    
+    // Use VarBuilder approach
+    let weights = ModelWeights::from_gguf(content, &mut file, device)?;
+    Ok(weights)
+}
+```
 
-1. **Today**: 
-   - Fix critical compilation errors
-   - Ensure stub mode works reliably
-   - Document GGUF metadata structure
+### 4. Direct Quantized Operations
 
-2. **Tomorrow**:
-   - Implement metadata mapping
-   - Test tensor loading
-   - Begin warning cleanup
+#### CRITICAL: Never Dequantize
+```rust
+// ❌ WRONG - Causes 100x slowdown
+let float_tensor = qtensor.dequantize(&device)?;
+let result = float_tensor.matmul(&input)?;
 
-3. **This Week**:
-   - Complete custom GGUF loader
-   - Test basic generation
-   - Reduce warnings to < 20
+// ✅ CORRECT - Direct quantized operation
+let qmatmul = QMatMul::from_qtensor(&qtensor)?;
+let result = qmatmul.forward(&input)?;
+```
 
-4. **Next Week**:
-   - Full model integration
-   - Performance optimization
-   - Production readiness
+## Common Issues & Solutions
 
-## 📝 Notes
+### Issue 1: Missing Metadata Keys
+**Error**: `Missing required key: llama.attention.head_count`
+**Solution**: Apply metadata mapping before loading
 
-- The GGUF file is valid but uses a different metadata schema than expected
-- Stub mode provides good UX while model integration is pending
-- The architecture is solid, just needs the model loading bridge
-- Consider reaching out to HuggingFace community for SmolLM3 GGUF best practices
+### Issue 2: Tensor Shape Mismatch
+**Error**: `Shape mismatch: expected [3072, 128256], got [128256, 3072]`
+**Solution**: Some tensors may be transposed in GGUF
 
-## 🔗 Resources
+### Issue 3: Q4_K Not Supported
+**Error**: `Unknown quantization type: Q4K`
+**Solution**: 
+- Check Candle version (needs 0.9.1+)
+- May need to use Q4_0 as fallback
+- Consider upgrading Candle
 
-- [Candle GGUF Documentation](https://github.com/huggingface/candle/tree/main/candle-core/src/quantized)
+### Issue 4: Memory Allocation Failed
+**Error**: `Failed to allocate memory for tensor`
+**Solution**: 
+- Ensure enough RAM (4GB minimum)
+- Use memory-mapped files for large GGUF
+- Enable CUDA if available
+
+## Testing Checklist
+
+### Pre-flight Checks
+- [ ] Verify GGUF file exists and is readable
+- [ ] Check file size (~1.9GB expected)
+- [ ] Confirm Candle has `quantized` feature enabled
+- [ ] Test Q4_K support in Candle
+
+### Loading Tests
+- [ ] Read GGUF metadata successfully
+- [ ] Map SmolLM3 keys to Llama keys
+- [ ] Load all 326 tensors
+- [ ] Verify tensor types (Q4_K_M vs F32)
+- [ ] Create ModelWeights successfully
+
+### Operation Tests
+- [ ] QMatMul operations work
+- [ ] Forward pass completes
+- [ ] Memory usage under 4GB
+- [ ] No dequantization occurring
+
+## Code Organization
+
+```
+src/services/ml/official/
+├── gguf_loader.rs
+│   ├── inspect_gguf()         # Inspection tool
+│   ├── map_metadata()         # Key mapping
+│   ├── load_smollm3_gguf()   # Main loader
+│   └── verify_q4k_support()  # Support check
+│
+├── model.rs
+│   ├── from_gguf()           # Load from GGUF
+│   └── forward()             # Use ModelWeights
+│
+└── quantized_model.rs
+    ├── QMatMul operations    # Direct quantized ops
+    └── No dequantization!    # Critical rule
+```
+
+## Next Steps
+
+1. **Immediate**: Create GGUF inspection tool
+2. **Day 1**: Verify Q4_K support in Candle
+3. **Day 2**: Implement metadata mapping
+4. **Day 3**: Test QTensor loading
+5. **Day 4**: Integrate with ModelWeights
+6. **Day 5**: Verify no dequantization
+
+## Success Criteria
+
+✅ GGUF loads without errors
+✅ All metadata mapped correctly
+✅ Q4_K_M tensors use QMatMul
+✅ F32 tensors load normally
+✅ Forward pass works
+✅ Memory < 4GB
+✅ Speed > 1 token/second
+
+## Resources
+
+- [Candle Quantized Docs](https://github.com/huggingface/candle/tree/main/candle-core/src/quantized)
+- [GGUF Format Spec](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
 - [SmolLM3 Model Card](https://huggingface.co/HuggingFaceTB/SmolLM3-3B)
-- [GGUF Format Specification](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
-- [llama.cpp Conversion Tools](https://github.com/ggerganov/llama.cpp/tree/master/convert)
