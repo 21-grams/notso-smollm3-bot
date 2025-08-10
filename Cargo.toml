@@ -14,6 +14,14 @@ edition = "2021"
 name = "notso-smollm3-bot"
 path = "src/main.rs"
 
+[[bin]]
+name = "inspect_gguf"
+path = "src/bin/inspect_gguf.rs"
+
+[[bin]]
+name = "test_q4k"
+path = "src/bin/test_q4k.rs"
+
 [dependencies]
 # Core ML - Official Candle (v0.9.1 - DO NOT DOWNGRADE)
 candle-core = { version = "0.9", default-features = false }

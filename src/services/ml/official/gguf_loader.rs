@@ -1,6 +1,7 @@
 //! Enhanced GGUF loader that maps SmolLM3 metadata to Llama format
 //! This allows us to use candle_transformers::models::quantized_llama directly
 
+use candle_core::quantized::gguf_file;
 use candle_core::quantized::gguf_file::{Content, Value};
 use candle_core::{Device, Result};
 use std::collections::HashMap;
@@ -291,7 +292,7 @@ impl GgufInspectionReport {
     }
 }
 
-use candle_core::quantized::gguf_file;
+
 
 /// Custom loader that works with SmolLM3 GGUF files (legacy)
 pub struct SmolLM3GgufLoader;
