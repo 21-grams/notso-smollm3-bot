@@ -16,27 +16,27 @@ pub fn map_smollm3_to_llama_metadata(content: &mut Content) {
     let key_mappings = [
         // Attention configuration
         (vec!["smollm3.attention.head_count", "smollm.attention_head_count", "attention.n_heads"], 
-         "llama.attention.head_count", Value::U32(32)),
+         "llama.attention.head_count", Value::U32(16)),
         (vec!["smollm3.attention.head_count_kv", "smollm.attention_head_count_kv", "attention.n_kv_heads"], 
-         "llama.attention.head_count_kv", Value::U32(8)),
+         "llama.attention.head_count_kv", Value::U32(4)),
         
         // Model architecture
         (vec!["smollm3.block_count", "smollm.n_layer", "n_layers", "block_count"], 
          "llama.block_count", Value::U32(36)),
         (vec!["smollm3.context_length", "smollm.max_seq_len", "max_position_embeddings"], 
-         "llama.context_length", Value::U32(131072)),
+         "llama.context_length", Value::U32(65536)),
         (vec!["smollm3.embedding_length", "smollm.hidden_size", "hidden_size", "d_model"], 
-         "llama.embedding_length", Value::U32(3072)),
+         "llama.embedding_length", Value::U32(2048)),
         (vec!["smollm3.feed_forward_length", "smollm.intermediate_size", "intermediate_size"], 
-         "llama.feed_forward_length", Value::U32(8192)),
+         "llama.feed_forward_length", Value::U32(11008)),
         
         // Vocabulary
         (vec!["smollm3.vocab_size", "tokenizer.ggml.model.vocab_size", "vocab_size"], 
          "llama.vocab_size", Value::U32(128256)),
         
         // RoPE configuration
-        (vec!["smollm3.rope.theta", "rope.theta", "rope_theta"], 
-         "llama.rope.freq_base", Value::F32(1000000.0)),
+        (vec!["smollm3.rope.freq_base", "smollm3.rope.theta", "rope.theta", "rope_theta"], 
+         "llama.rope.freq_base", Value::F32(5000000.0)),
         (vec!["smollm3.rope.dimension_count", "rope.dim", "rope_dim"], 
          "llama.rope.dimension_count", Value::U32(128)),
         

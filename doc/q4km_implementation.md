@@ -1,17 +1,61 @@
-# Q4_K_M Implementation for SmolLM3 Bot
+# Q4_K_M Implementation for SmolLM3 Bot - Candle 0.9.1
 
 ## Technical Implementation Details
 
-This document describes the actual implementation of Q4_K_M quantized model loading in the notso-smollm3-bot project using Candle 0.9.1+.
+This document describes the actual implementation of Q4_K_M quantized model loading in the notso-smollm3-bot project using Candle 0.9.1.
+
+## How Q4_K_M Actually Works in Candle 0.9.1
+
+### The Real API
+
+In Candle 0.9.1, Q4_K_M support works through the following components:
+
+1. **GgmlDType::Q4K** - The enum variant for Q4_K_M quantization
+2. **ModelWeights::from_gguf()** - Loads and manages Q4_K_M tensors internally
+3. **QTensor** methods:
+   - `new(storage, shape)` - Create from QStorage
+   - `quantize(tensor, dtype)` - Quantize a regular tensor
+   - `dequantize(device)` - Convert back to regular tensor (avoid this!)
+   - `storage_size_in_bytes()` - Get storage size
+   - `shape()` - Get tensor shape
+
+### Loading Process
+
+```rust
+use candle_transformers::models::quantized_llama::ModelWeights;
+use candle_core::quantized::gguf_file::Content;
+use candle_core::Device;
+use std::fs::File;
+
+// 1. Read GGUF file
+let mut file = File::open("models/SmolLM3-3B-Q4_K_M.gguf")?;
+let content = Content::read(&mut file)?;
+
+// 2. Map metadata if needed (SmolLM3 → Llama)
+map_smollm3_to_llama_metadata(&mut content);
+
+// 3. Load with ModelWeights - handles Q4_K_M internally
+let model = ModelWeights::from_gguf(content, &mut file, &device)?;
+
+// The model now contains Q4_K_M weights that stay quantized during inference!
+```
+
+### Key Points
+
+- **No manual QTensor creation**: ModelWeights handles this internally
+- **QMatMul is internal**: Created automatically for quantized layers
+- **Efficient operations**: Weights stay quantized during inference
+- **Memory savings**: ~3.8GB for 3B model vs 12GB unquantized
 
 ## Current Architecture
 
 ### Model Loading Pipeline
 
 ```
-GGUF File → Content Reader → Metadata Mapping → ModelWeights → SmolLM3Model
+GGUF File → Content Reader → Metadata Mapping → ModelWeights → Inference
                 ↓                    ↓                ↓
-          QTensor Loading    SmolLM3 Config    QMatMul Operations
+          Tensor Info        SmolLM3 Config    Q4_K_M Tensors
+                                                 (stay quantized)
 ```
 
 ## Key Components
@@ -51,6 +95,22 @@ pub struct SmolLM3Model {
     device: Device,
     nope_layers: Vec<usize>,
 }
+
+impl SmolLM3Model {
+    pub fn from_gguf<P: AsRef<Path>>(path: P, device: &Device) -> Result<Self> {
+        // Load GGUF content
+        let content = load_smollm3_gguf(&path, device)?;
+        
+        // Extract configuration
+        let config = SmolLM3Config::from_gguf(&content)?;
+        
+        // Load quantized weights using official loader
+        let mut file = File::open(path)?;
+        let weights = ModelWeights::from_gguf(content, &mut file, device)?;
+        
+        Ok(Self { weights, config, device: device.clone(), nope_layers })
+    }
+}
 ```
 
 ### 3. Q4_K_M Tensor Handling
@@ -58,7 +118,7 @@ pub struct SmolLM3Model {
 Q4_K_M tensors are handled through the `GgmlDType::Q4K` enum variant:
 
 ```rust
-// In tensor loading
+// In tensor info inspection
 match tensor_info.ggml_dtype {
     GgmlDType::Q4K => {
         // Q4_K_M format with 4-bit weights
@@ -128,10 +188,10 @@ let output = ml_service.generate(
 ## Critical Implementation Notes
 
 ### 1. No Dequantization During MatMul
-The QMatMul operations work directly on quantized weights:
+The ModelWeights implementation keeps weights quantized:
 ```rust
-// Weights stay quantized, only activations are f32
-let output = qmatmul.forward(&input_f32)?;
+// Inside ModelWeights - weights stay quantized
+// Only activations are f32/f16
 ```
 
 ### 2. Grouped Query Attention (GQA)
@@ -161,9 +221,41 @@ Expected output:
 ```
 ✅ Q4_K variant exists: Q4K
 ✅ Can load Q4_K_M tensors from GGUF
-✅ Can create QMatMul from Q4_K_M tensors
+✅ Q4_K_M tensor format verified for loading
 ✅ Can perform matrix multiplication
 ✅ Memory usage is efficient (no dequantization)
+```
+
+## How ModelWeights Works Internally
+
+The `ModelWeights::from_gguf` method in Candle 0.9.1:
+
+1. **Reads tensor info** from GGUF content
+2. **Creates QStorage** for Q4_K_M tensors internally
+3. **Wraps in QTensor** without dequantization
+4. **Creates QMatMul** operators for weight matrices
+5. **Handles forward pass** with quantized operations
+
+The key is that you don't need to manually create QTensors - the ModelWeights loader does this for you!
+
+## Common Pitfalls to Avoid
+
+### ❌ Don't Try to Create QTensor Manually
+```rust
+// This doesn't exist in Candle 0.9.1!
+let qtensor = QTensor::from_ggml(...); // NO!
+```
+
+### ❌ Don't Dequantize for Operations
+```rust
+// This defeats the purpose!
+let float_tensor = qtensor.dequantize(&device)?; // AVOID!
+```
+
+### ✅ Do Use ModelWeights
+```rust
+// This is the right way!
+let model = ModelWeights::from_gguf(content, &mut file, &device)?;
 ```
 
 ## Integration with Web Service
@@ -191,25 +283,27 @@ for (name, info) in &content.tensor_infos {
 ### 2. Monitor Memory
 ```rust
 let mem_before = get_memory_usage();
-let output = model.forward(&input)?;
+// ... operations ...
 let mem_after = get_memory_usage();
 println!("Memory delta: {} MB", (mem_after - mem_before) / 1_048_576);
 ```
 
 ### 3. Check Quantization Efficiency
 ```rust
-assert!(qtensor.storage_size() < qtensor.elem_count() * 4 / 3);
+// Tensors should stay small if properly quantized
+let size = tensor.storage_size_in_bytes();
+println!("Tensor storage: {} bytes", size);
 ```
 
 ## Next Steps
 
-1. **Optimize KV Cache**: Implement Q4_K quantization for KV cache
-2. **Flash Attention**: Add flash attention support for Q4_K_M
-3. **Batching**: Optimize batch processing for quantized models
-4. **Mixed Precision**: Use Q4_K_M weights with F16 activations
+1. **Complete generation loop**: Connect the model forward pass
+2. **Optimize KV Cache**: Keep cache in f16 for memory efficiency
+3. **Add thinking mode**: Handle special tokens
+4. **CUDA optimization**: Test GPU acceleration
 
 ## References
 
-- [Candle Q4K Implementation](https://github.com/huggingface/candle/blob/main/candle-core/src/quantized/k_quants.rs)
+- [Candle Quantized Models](https://github.com/huggingface/candle/tree/main/candle-transformers/src/models/quantized_llama.rs)
+- [GGUF Specification](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md)
 - [SmolLM3 Architecture](https://huggingface.co/blog/smollm3)
-- [GGUF Q4_K_M Specification](https://github.com/ggerganov/ggml/blob/master/docs/gguf.md#quantization-types)

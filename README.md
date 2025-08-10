@@ -13,30 +13,30 @@ Build a fully-featured inference engine for SmolLM3-3B with:
 
 ## 📊 Current Status
 
-**Version**: 0.6.0  
+**Version**: 0.7.0  
 **Date**: 2025-01-17  
-**Phase**: Q4_K_M Implementation Complete
+**Phase**: Q4_K_M Loading Complete ✅
 
 ### ✅ Complete
 - **Web Infrastructure**: Axum 0.8 server with HTMX SSE streaming
 - **UI/UX**: Beautiful chat interface with markdown rendering
 - **Session Management**: Multi-session support with UUID v7
 - **GGUF Inspector**: Tool to analyze model quantization and metadata
-- **Q4_K_M Support**: ✅ Verified full support in Candle 0.9.1
-- **QStorage/QTensor**: Complete implementation with proper typing
-- **Model Loading**: GGUF → QTensor → QMatMul pipeline working
-- **Tokenizer Foundation**: Basic tokenizer loading and chat templates
+- **Q4_K_M Support**: ✅ **FULLY VERIFIED** in Candle 0.9.1
+- **Metadata Mapping**: ✅ SmolLM3 → Llama format working
+- **Model Loading**: ✅ `ModelWeights::from_gguf()` successful
+- **Memory Efficiency**: ✅ Weights stay quantized (1.78GB file → 2.9GB in memory)
 
 ### 🚧 In Progress
-- **Inference Pipeline**: Connecting model forward pass
-- **Generation Loop**: Token-by-token generation
-- **KV Cache**: Implementation for 128K context
+- **Forward Pass**: Implementing actual inference through the model
+- **Generation Loop**: Token-by-token generation with logits processing
+- **KV Cache**: Implementation for 65536 context length
 
 ### ⏳ Next Steps
-1. Complete generation loop with logits processing
-2. Implement KV cache for 128K context
-3. Add thinking mode support
-4. CUDA optimization for GPU acceleration
+1. Implement forward pass using ModelWeights
+2. Complete generation loop with sampling
+3. Add KV cache for conversation context
+4. Integrate thinking mode (`<think>` tokens)
 
 ## 🛠️ Development Tools
 
@@ -52,13 +52,15 @@ cargo run --bin test_q4k
 ```
 
 ### Key Findings
-- ✅ GGUF file contains 326 tensors (expected count)
-- ✅ Q4_K_M quantization detected for weight tensors
-- ✅ F32 tensors for embeddings and norms (not quantized)
-- ✅ **Candle 0.9.1 fully supports Q4_K_M via GgmlDType::Q4K**
-- ✅ **QMatMul::from_qtensor() works without dequantization**
-- ✅ **Direct quantized operations confirmed (50-100x speedup)**
-- ✅ Metadata mapping implemented: SmolLM3 → Llama format
+- ✅ GGUF file contains 326 tensors (216 Q4K, 37 Q6K, 73 F32)
+- ✅ **Model dimensions corrected**:
+  - Hidden size: **2048** (not 3072)
+  - Intermediate: **11008** (not 8192)
+  - Heads: **16** (not 32)
+  - KV heads: **4** (not 8)
+- ✅ **Metadata mapping working**: SmolLM3 → Llama format
+- ✅ **Q4_K_M fully supported** via `GgmlDType::Q4K`
+- ✅ **Efficient loading**: 1.78GB file uses ~2.9GB memory (reasonable)
 
 ## 🏗️ Architecture
 
@@ -261,12 +263,13 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Project Status**: 🟡 Active Development (45% Complete)
+**Project Status**: 🟢 Active Development (55% Complete)
 
 **Critical Next Steps**:
 1. ✅ ~~Verify Candle Q4_K support~~ **COMPLETE**
 2. ✅ ~~Create GGUF inspection tool~~ **COMPLETE**
 3. ✅ ~~Implement proper model loading~~ **COMPLETE**
-4. 🚧 Connect generation loop to inference
+4. ✅ ~~Fix metadata mapping~~ **COMPLETE**
+5. 🚧 Implement forward pass and generation loop
 
 For questions or contributions, please open an issue on [GitHub](https://github.com/21-grams/notso-smollm3-bot).

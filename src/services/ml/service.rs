@@ -53,7 +53,7 @@ impl MLService {
         // Initialize KV cache for all layers
         let kv_cache = SmolLM3KVCache::new(
             config.base.num_hidden_layers,
-            65536, // Max context length
+            config.base.max_position_embeddings, // Use actual max context
             device.clone(),
         );
         

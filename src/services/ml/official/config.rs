@@ -44,19 +44,19 @@ impl SmolLM3Config {
     /// Create SmolLM3-3B configuration
     pub fn smollm3_3b() -> Self {
         let base = LlamaConfig {
-            hidden_size: 3072,
-            intermediate_size: 8192,
+            hidden_size: 2048,
+            intermediate_size: 11008,
             vocab_size: 128256,
             num_hidden_layers: 36,
-            num_attention_heads: 32,
-            num_key_value_heads: 8, // GQA with 4:1 ratio
+            num_attention_heads: 16,
+            num_key_value_heads: 4, // GQA with 4:1 ratio
             rms_norm_eps: 1e-5,
-            rope_theta: 1000000.0, // Extended context RoPE
+            rope_theta: 5000000.0, // Extended context RoPE
             use_flash_attn: false, // Not yet supported in Candle
-            head_dim: 96, // 3072 / 32
+            head_dim: 128, // 2048 / 16
             tie_word_embeddings: false,
             rope_scaling: None,
-            max_position_embeddings: 131072,
+            max_position_embeddings: 65536,
         };
         
         // NoPE layers: indices 3, 7, 11, 15, 19, 23, 27, 31, 35
@@ -79,21 +79,21 @@ impl SmolLM3Config {
         use super::gguf_loader::{get_metadata_u32, get_metadata_f32};
         
         let hidden_size = get_metadata_u32(content, &["llama.embedding_length", "hidden_size"])
-            .unwrap_or(3072) as usize;
+            .unwrap_or(2048) as usize;
         let intermediate_size = get_metadata_u32(content, &["llama.feed_forward_length", "intermediate_size"])
-            .unwrap_or(8192) as usize;
+            .unwrap_or(11008) as usize;
         let vocab_size = get_metadata_u32(content, &["llama.vocab_size", "vocab_size"])
             .unwrap_or(128256) as usize;
         let num_hidden_layers = get_metadata_u32(content, &["llama.block_count", "n_layer"])
             .unwrap_or(36) as usize;
         let num_attention_heads = get_metadata_u32(content, &["llama.attention.head_count", "n_head"])
-            .unwrap_or(32) as usize;
+            .unwrap_or(16) as usize;
         let num_key_value_heads = get_metadata_u32(content, &["llama.attention.head_count_kv", "n_kv_head"])
-            .unwrap_or(8) as usize;
+            .unwrap_or(4) as usize;
         let rms_norm_eps = get_metadata_f32(content, &["llama.attention.layer_norm_rms_epsilon", "rms_norm_eps"])
             .unwrap_or(1e-5) as f64;
         let rope_theta = get_metadata_f32(content, &["llama.rope.freq_base", "rope_theta"])
-            .unwrap_or(1000000.0) as f32;
+            .unwrap_or(5000000.0) as f32;
         
         let base = LlamaConfig {
             hidden_size,
@@ -108,7 +108,7 @@ impl SmolLM3Config {
             head_dim: hidden_size / num_attention_heads,
             tie_word_embeddings: false,
             rope_scaling: None,
-            max_position_embeddings: 131072,
+            max_position_embeddings: 65536,
         };
         
         // NoPE layers for SmolLM3
