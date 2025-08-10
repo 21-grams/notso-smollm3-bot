@@ -15,85 +15,82 @@
     <script src="https://cdn.jsdelivr.net/npm/htmx-ext-sse@2.2.2/sse.js"></script>
     <!-- Markdown parser -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <!-- Optional: Syntax highlighting -->
+    <!-- Syntax highlighting -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css">
     <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
     
     <script>
-        // Configure marked.js
+        // IMPORTANT: Disable automatic highlighting to prevent hljs from processing raw text
+        document.addEventListener('DOMContentLoaded', function() {
+            if (typeof hljs !== 'undefined') {
+                hljs.configure({ 
+                    ignoreUnescapedHTML: true
+                });
+                // DO NOT call hljs.highlightAll() - we only highlight specific code blocks
+            }
+        });
+        
+        // Configure marked.js with controlled syntax highlighting
         marked.setOptions({
             breaks: true,
             gfm: true,
             highlight: function(code, lang) {
-                if (typeof hljs !== 'undefined' && lang) {
+                // Only highlight if language is explicitly specified
+                if (lang && typeof hljs !== 'undefined' && hljs.getLanguage(lang)) {
                     try {
                         return hljs.highlight(code, { language: lang }).value;
-                    } catch (e) {}
+                    } catch (e) {
+                        return code;
+                    }
                 }
                 return code;
             }
         });
         
-        // Wait for DOM to be ready
+        // Handle message completion and markdown rendering
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('[SmolLM3] Chat initialized');
-            
-            // Listen for HTMX SSE before message event to handle complete
             document.body.addEventListener('htmx:sseBeforeMessage', function(evt) {
-                console.log('[SSE] Event received:', evt.detail);
                 
-                // Check if this is a complete event
+                // Handle complete event - render markdown and highlight code
                 if (evt.detail.type === 'complete') {
-                    evt.preventDefault(); // Prevent default swap
+                    evt.preventDefault();
                     
                     const messageId = evt.detail.data;
-                    console.log('[SSE] Complete event for message:', messageId);
-                    
                     const bubble = document.getElementById(`msg-${messageId}-bubble`);
-                    if (bubble) {
-                        // Clear thinking indicator if present
+                    
+                    if (bubble && !bubble.classList.contains('completed')) {
+                        // Remove thinking indicator
                         const thinking = bubble.querySelector('.thinking');
                         if (thinking) thinking.remove();
                         
-                        // Get raw markdown text that was streamed
-                        const rawMarkdown = bubble.textContent || bubble.innerText;
-                        console.log('[SSE] Raw markdown:', rawMarkdown);
+                        // Get text content and clean up indentation
+                        const cleanedText = bubble.textContent
+                            .split('\n')
+                            .map(line => line.trim())
+                            .filter(line => line.length > 0)
+                            .join('\n');
                         
-                        // Apply markdown formatting
-                        const formattedHtml = marked.parse(rawMarkdown);
-                        console.log('[SSE] Formatted HTML:', formattedHtml);
+                        // Parse as markdown and replace bubble content
+                        bubble.innerHTML = marked.parse(cleanedText);
                         
-                        // Replace content with formatted markdown
-                        bubble.innerHTML = formattedHtml;
+                        // Apply highlighting only to actual code blocks with language specified
+                        bubble.querySelectorAll('pre code[class*="language-"]').forEach(block => {
+                            hljs.highlightElement(block);
+                        });
                         
-                        // Add completed class for styling
                         bubble.classList.add('completed');
-                        
-                        // Apply syntax highlighting if available
-                        if (typeof hljs !== 'undefined') {
-                            bubble.querySelectorAll('pre code').forEach((block) => {
-                                hljs.highlightElement(block);
-                            });
-                        }
-                        
-                        // Scroll to bottom
-                        const messages = document.getElementById('chat-messages');
-                        messages.scrollTop = messages.scrollHeight;
-                    } else {
-                        console.error('[SSE] Bubble not found for message:', messageId);
+                        document.getElementById('chat-messages').scrollTop = 
+                            document.getElementById('chat-messages').scrollHeight;
                     }
                 }
                 
-                // Check if this is a msg-{id} event to clear thinking
+                // Handle msg-{id} events - clear thinking indicator when content starts
                 if (evt.detail.type && evt.detail.type.startsWith('msg-')) {
-                    const messageId = evt.detail.type.substring(4); // Remove 'msg-' prefix
+                    const messageId = evt.detail.type.substring(4);
                     const bubble = document.getElementById(`msg-${messageId}-bubble`);
                     if (bubble) {
                         const thinking = bubble.querySelector('.thinking');
-                        if (thinking) {
-                            console.log('[SSE] Clearing thinking indicator for:', messageId);
-                            thinking.remove();
-                        }
+                        if (thinking) thinking.remove();
                     }
                 }
             });
@@ -175,5 +172,8 @@
         </div>
         
     </div>
+    
+    <!-- Load chat.js for connection management and UI -->
+    <script src="/static/js/chat.js" defer></script>
 </body>
 </html>

@@ -14,12 +14,17 @@ A high-performance Rust chatbot featuring SmolLM3-3B (quantized Q4_K_M) with rea
 
 ## 📊 Current Status
 
-**Last Major Update**: 2025-08-09
+**Last Major Update**: 2025-01-17
+- ✅ Fixed markdown rendering issue with unwanted `<pre><code>` wrapping
 - ✅ HTMX SSE streaming with OOB swaps implemented
 - ✅ Pure HTMX content routing (no JavaScript accumulation)
-- ✅ Markdown rendering on completion
+- ✅ Proper two-pass markdown rendering (parse then highlight)
 - ✅ Clean separation of concerns
 - ✅ External JavaScript modules
+
+**Known Issues Fixed**:
+- ~~Messages wrapped in code blocks~~ → Fixed by trimming indentation before markdown parsing
+- ~~Highlight.js interfering with markdown~~ → Fixed with selective highlighting
 
 ## 🏗️ Architecture
 

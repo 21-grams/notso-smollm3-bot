@@ -1,11 +1,5 @@
-// Chat functionality - handles SSE events and markdown rendering
-
-// Configure marked for markdown parsing
-marked.setOptions({ 
-    breaks: true, 
-    gfm: true, 
-    sanitize: false 
-});
+// Chat functionality - handles SSE connection and UI interactions ONLY
+// Markdown rendering is handled in the template
 
 // Track connection state
 let sseConnectionActive = false;
@@ -32,11 +26,8 @@ document.addEventListener('htmx:sseError', function(e) {
         reconnectAttempts++;
         
         setTimeout(() => {
-            // HTMX SSE extension should auto-reconnect
-            // If not, we may need to manually trigger
             if (!sseConnectionActive) {
                 console.log('[SSE] Attempting reconnection...');
-                // The SSE extension handles reconnection automatically
             }
         }, delay);
     } else {
@@ -72,7 +63,6 @@ function updateConnectionStatus(status) {
         case 'failed':
             statusBadge.textContent = '⚠️ Connection Failed';
             statusBadge.style.color = 'var(--error-color, #ef4444)';
-            // Show user a message to refresh the page
             showErrorMessage('Connection lost. Please refresh the page to reconnect.');
             break;
     }
@@ -96,47 +86,6 @@ function showErrorMessage(message) {
         messages.scrollTop = messages.scrollHeight;
     }
 }
-
-// Listen for SSE complete events to render markdown
-document.addEventListener('sse:complete', function(e) {
-    // Get the message ID from the event data
-    const messageId = e.detail?.data || e.data;
-    if (!messageId) return;
-    
-    console.log('[Markdown] Rendering for message:', messageId);
-    
-    // Find the content div for this message
-    const contentDiv = document.querySelector(`#msg-${messageId}-content`);
-    if (contentDiv && contentDiv.textContent) {
-        // Remove loading indicator from parent bubble
-        const bubble = contentDiv.parentElement;
-        const loading = bubble.querySelector('.loading');
-        if (loading) loading.remove();
-        
-        // Get the raw text and render as markdown
-        const rawText = contentDiv.textContent;
-        contentDiv.innerHTML = marked.parse(rawText);
-        
-        // Auto-scroll to show new content
-        const messages = document.getElementById('chat-messages');
-        if (messages) {
-            messages.scrollTop = messages.scrollHeight;
-        }
-    }
-});
-
-// Remove loading indicators when content starts streaming
-document.addEventListener('htmx:oobAfterSwap', function(e) {
-    if (e.detail && e.detail.target) {
-        const parent = e.detail.target.parentElement;
-        if (parent) {
-            const loading = parent.querySelector('.loading');
-            if (loading) {
-                loading.remove();
-            }
-        }
-    }
-});
 
 // Auto-resize textarea as user types
 const messageInput = document.getElementById('message-input');
@@ -187,5 +136,4 @@ document.body.addEventListener('htmx:afterSwap', function(evt) {
 // Handle beforeunload to clean up SSE connection
 window.addEventListener('beforeunload', function(e) {
     console.log('[SSE] Page unloading, connection will close');
-    // The SSE connection will be closed automatically
 });
