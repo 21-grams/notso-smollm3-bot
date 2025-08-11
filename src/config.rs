@@ -39,7 +39,7 @@ impl Config {
                 .parse()?,
             
             model_path: env::var("MODEL_PATH")
-                .unwrap_or_else(|_| "models/SmolLM3-3B-Q4_K_M.gguf".to_string()),
+                .unwrap_or_else(|_| "models/HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf".to_string()),
             tokenizer_path: env::var("TOKENIZER_PATH")
                 .unwrap_or_else(|_| "models/tokenizer.json".to_string()),
             device: DeviceConfig::Cpu,

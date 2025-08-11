@@ -44,24 +44,35 @@ impl NopeModel {
         
         tracing::info!("Loading {} tensors from GGUF", content.tensor_infos.len());
         
+        // Log all tensor names for debugging
+        let tensor_names: Vec<String> = content.tensor_infos.keys().cloned().collect();
+        tracing::debug!("Available tensors: {:?}", tensor_names.iter().filter(|n| 
+            n.contains("token") || n.contains("embed") || n.contains("output")
+        ).collect::<Vec<_>>());
+        
         for (tensor_name, _tensor_info) in content.tensor_infos.iter() {
             tracing::trace!("Loading tensor: {}", tensor_name);
             let tensor = content.tensor(&mut file, tensor_name, device)?;
             tensors.insert(tensor_name.clone(), Arc::new(tensor));
         }
         
-        // Load embedding and LM head
-        let embed_tokens = tensors.get("model.embed_tokens.weight")
-            .ok_or_else(|| candle_core::Error::Msg("Missing embed_tokens".to_string()))?
+        // Load embedding with GGUF naming (token_embd.weight)
+        let embed_tokens = tensors.get("token_embd.weight")
+            .ok_or_else(|| {
+                tracing::error!("Could not find token_embd.weight. Available token tensors: {:?}", 
+                    tensors.keys().filter(|k| k.contains("token") || k.contains("emb")).collect::<Vec<_>>());
+                candle_core::Error::Msg("Missing token_embd.weight".to_string())
+            })?
             .clone();
         
-        let lm_head = tensors.get("lm_head.weight")
-            .ok_or_else(|| candle_core::Error::Msg("Missing lm_head".to_string()))?
-            .clone();
+        // Check for output/lm_head tensor - SmolLM3 uses tied embeddings
+        // The output projection shares weights with input embeddings
+        tracing::info!("Using tied embeddings for output projection");
+        let lm_head = embed_tokens.clone();
         
         // Load final norm
-        let norm_weight = tensors.get("model.norm.weight")
-            .ok_or_else(|| candle_core::Error::Msg("Missing model.norm.weight".to_string()))?
+        let norm_weight = tensors.get("output_norm.weight")
+            .ok_or_else(|| candle_core::Error::Msg("Missing output_norm.weight".to_string()))?
             .dequantize(device)?;
         let norm = RmsNorm::new(norm_weight, 1e-5);
         
@@ -125,8 +136,9 @@ impl NopeModel {
         // Final norm
         hidden_states = self.norm.forward(&hidden_states)?;
         
-        // LM head projection
+        // LM head projection (using tied embeddings)
         let lm_head_weight = self.lm_head.dequantize(&self.device)?;
+        // For tied embeddings, we need to transpose the weight matrix
         let logits = hidden_states.matmul(&lm_head_weight.t()?)?;
         
         Ok(logits)
@@ -158,7 +170,8 @@ impl NopeLayer {
         config: &crate::services::ml::official::config::SmolLM3Config,
         device: &Device,
     ) -> Result<Self> {
-        let prefix = format!("model.layers.{}", layer_idx);
+        // GGUF uses blk.X prefix instead of model.layers.X
+        let prefix = format!("blk.{}", layer_idx);
         
         // Load attention
         let self_attn = NopeAttention::load(tensors, &prefix, config)?;
@@ -166,14 +179,14 @@ impl NopeLayer {
         // Load MLP
         let mlp = Mlp::load(tensors, &prefix)?;
         
-        // Load layer norms
-        let input_norm_weight = tensors.get(&format!("{}.input_layernorm.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.input_layernorm.weight", prefix)))?
+        // Load layer norms with GGUF naming
+        let input_norm_weight = tensors.get(&format!("{}.attn_norm.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.attn_norm.weight", prefix)))?
             .dequantize(device)?;
         let input_layernorm = RmsNorm::new(input_norm_weight, 1e-5);
         
-        let post_norm_weight = tensors.get(&format!("{}.post_attention_layernorm.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.post_attention_layernorm.weight", prefix)))?
+        let post_norm_weight = tensors.get(&format!("{}.ffn_norm.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.ffn_norm.weight", prefix)))?
             .dequantize(device)?;
         let post_attention_layernorm = RmsNorm::new(post_norm_weight, 1e-5);
         
@@ -236,20 +249,21 @@ impl NopeAttention {
         prefix: &str,
         config: &crate::services::ml::official::config::SmolLM3Config,
     ) -> Result<Self> {
-        let q_proj = tensors.get(&format!("{}.self_attn.q_proj.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.self_attn.q_proj.weight", prefix)))?
+        // GGUF uses simplified names: attn_q, attn_k, attn_v, attn_output
+        let q_proj = tensors.get(&format!("{}.attn_q.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.attn_q.weight", prefix)))?
             .clone();
         
-        let k_proj = tensors.get(&format!("{}.self_attn.k_proj.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.self_attn.k_proj.weight", prefix)))?
+        let k_proj = tensors.get(&format!("{}.attn_k.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.attn_k.weight", prefix)))?
             .clone();
         
-        let v_proj = tensors.get(&format!("{}.self_attn.v_proj.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.self_attn.v_proj.weight", prefix)))?
+        let v_proj = tensors.get(&format!("{}.attn_v.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.attn_v.weight", prefix)))?
             .clone();
         
-        let o_proj = tensors.get(&format!("{}.self_attn.o_proj.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.self_attn.o_proj.weight", prefix)))?
+        let o_proj = tensors.get(&format!("{}.attn_output.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.attn_output.weight", prefix)))?
             .clone();
         
         Ok(Self {
@@ -377,16 +391,17 @@ impl Mlp {
         tensors: &HashMap<String, Arc<QTensor>>,
         prefix: &str,
     ) -> Result<Self> {
-        let gate_proj = tensors.get(&format!("{}.mlp.gate_proj.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.mlp.gate_proj.weight", prefix)))?
+        // GGUF uses ffn_gate, ffn_up, ffn_down
+        let gate_proj = tensors.get(&format!("{}.ffn_gate.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.ffn_gate.weight", prefix)))?
             .clone();
         
-        let up_proj = tensors.get(&format!("{}.mlp.up_proj.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.mlp.up_proj.weight", prefix)))?
+        let up_proj = tensors.get(&format!("{}.ffn_up.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.ffn_up.weight", prefix)))?
             .clone();
         
-        let down_proj = tensors.get(&format!("{}.mlp.down_proj.weight", prefix))
-            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.mlp.down_proj.weight", prefix)))?
+        let down_proj = tensors.get(&format!("{}.ffn_down.weight", prefix))
+            .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.ffn_down.weight", prefix)))?
             .clone();
         
         Ok(Self {
