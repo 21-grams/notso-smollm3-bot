@@ -53,25 +53,20 @@ impl SmolLM3Model {
     
     /// Forward pass through the model
     pub fn forward(
-        &self,
+        &mut self,
         input_ids: &Tensor,
-        _position_ids: Option<&Tensor>,
+        position: usize,
         _kv_cache: Option<&mut crate::services::ml::smollm3::kv_cache::SmolLM3KVCache>,
     ) -> Result<Tensor> {
-        // The official ModelWeights doesn't have a direct forward method
-        // We'll use the forward_full implementation from llama_forward module
+        tracing::debug!("🚀 Starting forward pass at position {}", position);
         
-        // For now, return a placeholder
-        // The actual implementation is in llama_forward.rs
+        // Use ModelWeights' forward method
+        // Note: This applies RoPE to all layers (no NoPE support)
+        let logits = self.weights.forward(input_ids, position)?;
         
-        tracing::warn!("Forward pass needs full implementation - using placeholder");
+        tracing::debug!("✅ Forward pass complete, logits shape: {:?}", logits.shape());
         
-        // Placeholder: return random logits of correct shape
-        let batch_size = input_ids.dim(0)?;
-        let seq_len = input_ids.dim(1)?;
-        let vocab_size = self.config.base.vocab_size;
-        
-        Tensor::randn(0.0f32, 1.0, &[batch_size, seq_len, vocab_size], &self.device)
+        Ok(logits)
     }
     
     /// Check if a layer should skip position encoding (NoPE)

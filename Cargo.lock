@@ -1944,6 +1944,7 @@ dependencies = [
  "futures",
  "hf-hub",
  "html-escape",
+ "lazy_static",
  "minijinja",
  "num_cpus",
  "rand 0.8.5",

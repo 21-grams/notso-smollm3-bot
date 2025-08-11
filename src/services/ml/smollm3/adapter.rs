@@ -1,13 +1,15 @@
 //! Bridge between official Candle and SmolLM3 features
+//! 
+//! NOTE: This adapter is currently not used in the main implementation.
+//! It's kept for potential future use when bridging between different model backends.
 
 use crate::services::ml::official::{OfficialSmolLM3Model, SmolLM3Config};
 use candle_core::{Tensor, Result, Device};
 use super::nope_layers::NopeHandler;
 use super::thinking::ThinkingDetector;
 
-
 pub struct SmolLM3Adapter {
-    model: OfficialSmolLM3Model,  // Keep as owned for now
+    model: OfficialSmolLM3Model,
     nope_handler: NopeHandler,
     thinking_detector: ThinkingDetector,
     config: SmolLM3Config,
@@ -25,12 +27,12 @@ impl SmolLM3Adapter {
         }
     }
     
-    /// Get a reference to the config (for creating generator)
+    /// Get a reference to the config
     pub fn get_config(&self) -> &SmolLM3Config {
         &self.config
     }
     
-    /// Get device (for creating generator)
+    /// Get device
     pub fn get_device(&self) -> &Device {
         self.model.device()
     }
@@ -41,27 +43,11 @@ impl SmolLM3Adapter {
         input_ids: &Tensor,
         position: usize,
     ) -> Result<Tensor> {
-        // Check if current layer needs NoPE handling
-        let layer_idx = position % self.config.base.num_hidden_layers;
+        // NOTE: This method is not currently compatible with the new model API
+        // which expects position as usize instead of Option<&Tensor>
+        // Keeping for reference but not actively used
         
-        if self.nope_handler.should_skip_rope(layer_idx) {
-            // Custom handling for NoPE layers
-            self.forward_nope_layer(input_ids, layer_idx)
-        } else {
-            // Standard official forward pass
-            // Create position tensor from position value
-            let seq_len = input_ids.dim(1)?;
-            let positions = Tensor::arange(position as u32, (position + seq_len) as u32, &self.model.device())?;
-            self.model.forward(input_ids, Some(&positions), None)
-        }
-    }
-    
-    fn forward_nope_layer(&mut self, input_ids: &Tensor, layer_idx: usize) -> Result<Tensor> {
-        // For NoPE layers, we still use the standard forward but mark it for special handling
-        // The actual RoPE skipping would need to be implemented at a lower level
-        tracing::debug!("Processing NoPE layer {}", layer_idx);
-        // For NoPE layers, we pass None for position_ids
-        self.model.forward(input_ids, None, None)
+        self.model.forward(input_ids, position, None)
     }
     
     pub fn config(&self) -> &SmolLM3Config {

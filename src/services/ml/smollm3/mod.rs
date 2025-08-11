@@ -8,6 +8,7 @@ pub mod kv_cache;  // Make public for official module to access
 mod nope_layers;
 mod tokenizer_ext;
 mod stub_mode;
+pub mod nope_model;  // NoPE-aware model implementation
 
 pub use adapter::SmolLM3Adapter;
 pub use chat_template::{ChatTemplate, ChatMessage};

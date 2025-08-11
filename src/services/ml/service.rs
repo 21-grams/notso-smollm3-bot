@@ -6,11 +6,20 @@ use std::path::Path;
 
 use super::smollm3::{SmolLM3Tokenizer, SmolLM3KVCache};
 use super::official::model::SmolLM3Model;
+use super::smollm3::nope_model::NopeModel;
+
+/// Model backend selection
+enum ModelBackend {
+    /// Standard ModelWeights (all layers use RoPE)
+    Standard(SmolLM3Model),
+    /// NoPE-aware model (selective RoPE)
+    Nope(NopeModel),
+}
 
 /// Main ML service for SmolLM3 inference
 pub struct MLService {
-    /// The SmolLM3 model wrapping quantized Llama
-    model: SmolLM3Model,
+    /// The model backend
+    model: ModelBackend,
     /// Tokenizer with thinking mode support
     tokenizer: SmolLM3Tokenizer,
     /// KV cache for efficient generation
@@ -39,11 +48,33 @@ impl MLService {
         _template_path: P,
         device: Device,
     ) -> Result<Self> {
+        Self::new_with_backend(model_path, tokenizer_path, _template_path, device, true)
+    }
+    
+    pub fn new_with_backend<P: AsRef<Path>>(
+        model_path: P,
+        tokenizer_path: P,
+        _template_path: P,
+        device: Device,
+        use_nope: bool,
+    ) -> Result<Self> {
         tracing::info!("🚀 Initializing SmolLM3 ML Service");
+        tracing::info!("  Backend: {}", if use_nope { "NoPE-aware" } else { "Standard" });
         
-        // Load model using our SmolLM3 wrapper
-        let model = SmolLM3Model::from_gguf(model_path, &device)?;
-        let config = model.config().clone();
+        // Load model based on backend selection
+        let (model, config) = if use_nope {
+            // Use NoPE-aware model
+            let nope_model = NopeModel::from_gguf(model_path, &device)?;
+            let config = nope_model.config().clone();
+            tracing::info!("✅ NoPE model loaded with layers: {:?}", config.nope_layer_indices);
+            (ModelBackend::Nope(nope_model), config)
+        } else {
+            // Use standard ModelWeights
+            let std_model = SmolLM3Model::from_gguf(model_path, &device)?;
+            let config = std_model.config().clone();
+            tracing::info!("✅ Standard model loaded (RoPE on all layers)");
+            (ModelBackend::Standard(std_model), config)
+        };
         
         // Initialize tokenizer
         let tokenizer = SmolLM3Tokenizer::from_file(
@@ -88,27 +119,42 @@ impl MLService {
         let tokens = self.tokenizer.encode(prompt)
             .map_err(|e| candle_core::Error::Msg(format!("Encoding error: {}", e)))?;
         
+        let prompt_len = tokens.len();
         let mut all_tokens = tokens.clone();
         let mut output_tokens = Vec::new();
         let mut in_thinking_mode = false;
+        let mut position = 0; // Start at position 0
+        
+        tracing::debug!("Prompt has {} tokens", prompt_len);
         
         // Convert to tensor
-        let mut input_ids = Tensor::new(tokens.as_slice(), &self.device)?
+        let input_ids = Tensor::new(tokens.as_slice(), &self.device)?
             .unsqueeze(0)?; // Add batch dimension
         
+        // Process the prompt through the model
+        tracing::debug!("📥 Processing prompt at position 0");
+        let logits = match &mut self.model {
+            ModelBackend::Standard(m) => m.forward(&input_ids, position, Some(&mut self.kv_cache))?,
+            ModelBackend::Nope(m) => m.forward(&input_ids, position)?,
+        };
+        
+        // After prompt, position jumps to prompt_len
+        position = prompt_len;
+        tracing::debug!("📍 Position after prompt: {}", position);
+        
+        // Get the last token's logits from prompt
+        let mut last_logits = logits.i((0, logits.dim(1)? - 1, ..))?;
+        
         // Generation loop
-        for _step in 0..max_tokens {
-            // Forward pass through model
-            let logits = self.forward_with_cache(&input_ids)?;
-            
-            // Get the last token's logits
-            let last_logits = logits.i((0, logits.dim(1)? - 1, ..))?;
-            
+        for step in 0..max_tokens {
             // Sample next token
             let next_token = self.logits_processor.sample(&last_logits)?;
             
             // Get config for special tokens
-            let config = self.model.config();
+            let config = match &self.model {
+                ModelBackend::Standard(m) => m.config(),
+                ModelBackend::Nope(m) => m.config(),
+            };
             
             // Handle special tokens
             if next_token == config.think_token_id {
@@ -117,53 +163,53 @@ impl MLService {
                     output_tokens.push("<thinking>".to_string());
                 }
                 all_tokens.push(next_token);
-                continue;
             } else if next_token == config.think_end_token_id {
                 in_thinking_mode = false;
                 if enable_thinking {
                     output_tokens.push("</thinking>".to_string());
                 }
                 all_tokens.push(next_token);
-                continue;
-            }
-            
-            // Check for EOS token
-            if next_token == 128001 { // EOS token
-                tracing::info!("🛑 EOS token detected, stopping generation");
+            } else if next_token == 128001 { // EOS token
+                tracing::info!("🛑 EOS token detected at step {}, stopping generation", step);
                 break;
+            } else {
+                // Decode and add to output
+                let token_text = self.tokenizer.decode(&[next_token])
+                    .map_err(|e| candle_core::Error::Msg(format!("Decoding error: {}", e)))?;
+                
+                if !in_thinking_mode || enable_thinking {
+                    output_tokens.push(token_text);
+                }
+                
+                all_tokens.push(next_token);
             }
             
-            // Decode and add to output
-            let token_text = self.tokenizer.decode(&[next_token])
-                .map_err(|e| candle_core::Error::Msg(format!("Decoding error: {}", e)))?;
+            // Forward pass for next token
+            let next_input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
             
-            if !in_thinking_mode || enable_thinking {
-                output_tokens.push(token_text);
-            }
+            tracing::trace!("Generating token {} at position {}", step + 1, position);
+            let logits = match &mut self.model {
+                ModelBackend::Standard(m) => m.forward(&next_input, position, Some(&mut self.kv_cache))?,
+                ModelBackend::Nope(m) => m.forward(&next_input, position)?,
+            };
             
-            all_tokens.push(next_token);
+            // Increment position for next token
+            position += 1;
             
-            // Update input for next iteration
-            input_ids = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
+            // Get logits for sampling
+            last_logits = logits.i((0, 0, ..))?; // Shape is [1, 1, vocab_size] for single token
         }
         
         // Reset cache for next generation
         self.kv_cache.reset();
+        if let ModelBackend::Nope(m) = &mut self.model {
+            m.reset_cache();
+        }
         
         tracing::info!("✅ Generated {} tokens", output_tokens.len());
         Ok(output_tokens)
     }
-    
-    /// Forward pass with KV caching
-    fn forward_with_cache(&mut self, input_ids: &Tensor) -> Result<Tensor> {
-        // For now, use the model's forward method
-        // In a full implementation, this would handle:
-        // 1. KV cache management per layer
-        // 2. NoPE layer special handling
-        // 3. GQA attention with proper head expansion
-        
-        self.model.forward(input_ids, None, Some(&mut self.kv_cache))
-    }
+
     
     /// Apply chat template to messages
     pub fn apply_chat_template(
