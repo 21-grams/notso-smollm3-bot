@@ -106,13 +106,28 @@ impl NopeModel {
     
     /// Forward pass through the model
     pub fn forward(&mut self, input_ids: &Tensor, position: usize) -> Result<Tensor> {
-        let (_batch_size, seq_len) = input_ids.dims2()?;
+        // Handle both 1D and 2D input
+        let (input_ids, batch_size, seq_len) = match input_ids.dims() {
+            &[seq] => {
+                // 1D input: [seq_len] - this is what we get
+                (input_ids.clone(), 1, seq)
+            }
+            &[batch, seq] => {
+                // 2D input: [batch_size, seq_len] - flatten for embedding lookup
+                let flat = input_ids.flatten(0, 1)?;
+                (flat, batch, seq)
+            }
+            _ => return Err(candle_core::Error::Msg("Invalid input dimensions".to_string())),
+        };
         
-        tracing::debug!("NoPE forward pass: position={}, seq_len={}", position, seq_len);
+        tracing::debug!("NoPE forward pass: position={}, seq_len={}, batch={}", position, seq_len, batch_size);
         
-        // Token embeddings
+        // Token embeddings - index_select expects 1D indices
         let mut hidden_states = self.embed_tokens.dequantize(&self.device)?;
-        hidden_states = hidden_states.index_select(input_ids, 0)?;
+        hidden_states = hidden_states.index_select(&input_ids, 0)?;
+        
+        // Reshape to [batch_size, seq_len, hidden_size] after embedding lookup
+        hidden_states = hidden_states.reshape((batch_size, seq_len, self.config.base.hidden_size))?;
         
         // Pass through transformer layers
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {

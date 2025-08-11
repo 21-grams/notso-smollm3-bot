@@ -259,8 +259,8 @@ async fn generate_response_buffered(
     let mut buffer = StreamingBuffer::new(sender, message_id.clone());
     
     // Check if model is available and generate accordingly
-    let ml_service = state.model.read().await;
-    match ml_service.as_ref() {
+    let mut ml_service = state.model.write().await;
+    match ml_service.as_mut() {
         Some(service) => {
             // Try to use the model
             if let Err(e) = service.generate_streaming(&message, &mut buffer).await {

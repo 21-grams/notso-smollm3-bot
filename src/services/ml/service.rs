@@ -34,14 +34,163 @@ impl MLService {
     
     /// Generate with streaming support
     pub async fn generate_streaming(
-        &self,
-        _prompt: &str,
-        _buffer: &mut crate::services::StreamingBuffer,
+        &mut self,
+        prompt: &str,
+        buffer: &mut crate::services::StreamingBuffer,
     ) -> anyhow::Result<()> {
-        // TODO: Implement actual model inference here
-        // For now, return an error to indicate model is not ready
-        Err(anyhow::anyhow!("Model inference not yet implemented"))
+        tracing::info!("🔄 Starting streaming generation");
+        
+        // 1. Tokenize the prompt
+        let tokens = self.tokenizer.encode(prompt)
+            .map_err(|e| anyhow::anyhow!("Tokenizer encoding error: {}", e))?;
+        
+        if tokens.is_empty() {
+            return Err(anyhow::anyhow!("Empty prompt after tokenization"));
+        }
+        
+        let prompt_len = tokens.len();
+        tracing::debug!("📝 Prompt tokenized: {} tokens", prompt_len);
+        
+        // 2. Initialize generation state
+        let mut all_tokens = tokens.clone();
+        let mut position = 0;
+        let max_tokens = 512; // Default max generation length
+        let mut in_thinking_mode = false;
+        
+        // Get special token IDs from config
+        let (eos_token, think_token, think_end_token) = match &self.model {
+            ModelBackend::Standard(m) => {
+                let cfg = m.config();
+                (128001u32, cfg.think_token_id, cfg.think_end_token_id)
+            },
+            ModelBackend::Nope(m) => {
+                let cfg = m.config();
+                (128001u32, cfg.think_token_id, cfg.think_end_token_id)
+            }
+        };
+        
+        // 3. Process the prompt (prefill phase)
+        // Create input tensor - keep it 1D for embedding lookup
+        let input_tensor = Tensor::new(tokens.as_slice(), &self.device)?;
+        
+        tracing::debug!("📥 Running prefill for {} tokens", prompt_len);
+        let prompt_logits = match &mut self.model {
+            ModelBackend::Standard(m) => {
+                m.forward(&input_tensor, position, Some(&mut self.kv_cache))?
+            },
+            ModelBackend::Nope(m) => {
+                m.forward(&input_tensor, position)?
+            }
+        };
+        
+        // Get last token's logits from the prompt
+        // Handle different tensor shapes - logits should be [batch, seq_len, vocab_size]
+        let mut last_logits = if prompt_logits.dims().len() == 3 {
+            // [batch, seq_len, vocab_size] - take last position
+            prompt_logits.i((0, prompt_logits.dim(1)? - 1, ..))?  
+        } else if prompt_logits.dims().len() == 2 {
+            // [seq_len, vocab_size] - take last position
+            prompt_logits.i((prompt_logits.dim(0)? - 1, ..))?  
+        } else {
+            return Err(anyhow::anyhow!("Unexpected logits shape: {:?}", prompt_logits.dims()));
+        };
+        
+        // Update position to end of prompt
+        position = prompt_len;
+        tracing::debug!("📍 Position after prefill: {}", position);
+        
+        // 4. Generation loop
+        let mut generated_count = 0;
+        let mut consecutive_newlines = 0;
+        
+        for step in 0..max_tokens {
+            // 4a. Sample next token from logits
+            let next_token = self.logits_processor.sample(&last_logits)?;
+            all_tokens.push(next_token);
+            
+            // 4b. Check for stop conditions
+            if next_token == eos_token {
+                tracing::info!("🛑 EOS token detected at step {}", step);
+                break;
+            }
+            
+            // 4c. Handle thinking mode tokens
+            if next_token == think_token {
+                in_thinking_mode = true;
+                tracing::debug!("🤔 Entering thinking mode");
+                // Don't stream thinking start token
+            } else if next_token == think_end_token {
+                in_thinking_mode = false;
+                tracing::debug!("💭 Exiting thinking mode");
+                // Don't stream thinking end token
+            } else if !in_thinking_mode {
+                // 4d. Decode and stream the token (only if not in thinking mode)
+                let token_text = self.tokenizer.decode(&[next_token])
+                    .map_err(|e| anyhow::anyhow!("Decoding error: {}", e))?;
+                
+                // Check for repeated newlines (potential endless generation)
+                if token_text == "\n" {
+                    consecutive_newlines += 1;
+                    if consecutive_newlines > 3 {
+                        tracing::warn!("Too many consecutive newlines, stopping");
+                        break;
+                    }
+                } else {
+                    consecutive_newlines = 0;
+                }
+                
+                // Stream the token to the buffer
+                buffer.push(&token_text).await
+                    .map_err(|e| anyhow::anyhow!("Buffer push error: {}", e))?;
+                
+                generated_count += 1;
+                
+                // Yield occasionally to prevent blocking
+                if generated_count % 10 == 0 {
+                    tokio::task::yield_now().await;
+                }
+            }
+            
+            // 4e. Prepare next token input and run forward pass
+            // Keep tensor 1D for embedding lookup
+            let next_input = Tensor::new(&[next_token], &self.device)?;
+            
+            tracing::trace!("🔮 Generating token {} at position {}", step + 1, position);
+            
+            let logits = match &mut self.model {
+                ModelBackend::Standard(m) => {
+                    m.forward(&next_input, position, Some(&mut self.kv_cache))?
+                },
+                ModelBackend::Nope(m) => {
+                    m.forward(&next_input, position)?
+                }
+            };
+            
+            // Update for next iteration
+            last_logits = logits.i((0, 0, ..))?; // Shape [1, 1, vocab_size] -> [vocab_size]
+            position += 1;
+            
+            // Safety check for position overflow
+            if position >= 65536 { // Max context length
+                tracing::warn!("Reached maximum context length");
+                break;
+            }
+        }
+        
+        // 5. Complete the stream
+        buffer.complete().await
+            .map_err(|e| anyhow::anyhow!("Buffer completion error: {}", e))?;
+        
+        // 6. Reset caches for next generation
+        self.kv_cache.reset();
+        if let ModelBackend::Nope(m) = &mut self.model {
+            m.reset_cache();
+        }
+        
+        tracing::info!("✅ Generated {} visible tokens", generated_count);
+        Ok(())
     }
+    
     pub fn new<P: AsRef<Path>>(
         model_path: P,
         tokenizer_path: P,
@@ -106,7 +255,7 @@ impl MLService {
         })
     }
     
-    /// Generate text from a prompt
+    /// Generate text from a prompt (non-streaming version)
     pub fn generate(
         &mut self,
         prompt: &str,
@@ -127,9 +276,8 @@ impl MLService {
         
         tracing::debug!("Prompt has {} tokens", prompt_len);
         
-        // Convert to tensor
-        let input_ids = Tensor::new(tokens.as_slice(), &self.device)?
-            .unsqueeze(0)?; // Add batch dimension
+        // Convert to tensor - keep 1D for NoPE model
+        let input_ids = Tensor::new(tokens.as_slice(), &self.device)?;
         
         // Process the prompt through the model
         tracing::debug!("📥 Processing prompt at position 0");
@@ -184,8 +332,8 @@ impl MLService {
                 all_tokens.push(next_token);
             }
             
-            // Forward pass for next token
-            let next_input = Tensor::new(&[next_token], &self.device)?.unsqueeze(0)?;
+            // Forward pass for next token - keep 1D for NoPE model
+            let next_input = Tensor::new(&[next_token], &self.device)?;
             
             tracing::trace!("Generating token {} at position {}", step + 1, position);
             let logits = match &mut self.model {
@@ -197,7 +345,14 @@ impl MLService {
             position += 1;
             
             // Get logits for sampling
-            last_logits = logits.i((0, 0, ..))?; // Shape is [1, 1, vocab_size] for single token
+            // For single token, logits should be [1, 1, vocab_size] or [1, vocab_size]
+            last_logits = if logits.dims().len() == 3 {
+                logits.i((0, 0, ..))?  // [batch, 1, vocab_size] -> [vocab_size]
+            } else if logits.dims().len() == 2 {
+                logits.i((0, ..))?  // [1, vocab_size] -> [vocab_size]
+            } else {
+                return Err(anyhow::anyhow!("Unexpected logits shape: {:?}", logits.dims()));
+            };
         }
         
         // Reset cache for next generation
@@ -252,6 +407,7 @@ pub struct MLServiceBuilder {
     temperature: f64,
     top_p: Option<f64>,
     seed: u64,
+    use_nope: bool,
 }
 
 impl Default for MLServiceBuilder {
@@ -264,6 +420,7 @@ impl Default for MLServiceBuilder {
             temperature: 0.9,
             top_p: Some(0.95),
             seed: 42,
+            use_nope: true, // Default to NoPE backend
         }
     }
 }
@@ -311,6 +468,12 @@ impl MLServiceBuilder {
         self
     }
     
+    /// Set whether to use NoPE backend
+    pub fn use_nope(mut self, use_nope: bool) -> Self {
+        self.use_nope = use_nope;
+        self
+    }
+    
     /// Build the MLService
     pub fn build(self) -> Result<MLService> {
         let model_path = self.model_path
@@ -322,6 +485,22 @@ impl MLServiceBuilder {
         let device = self.device
             .unwrap_or_else(|| Device::cuda_if_available(0).unwrap_or(Device::Cpu));
         
-        MLService::new(model_path, tokenizer_path, template_path, device)
+        // Create service with specified backend
+        let mut service = MLService::new_with_backend(
+            model_path, 
+            tokenizer_path, 
+            template_path, 
+            device,
+            self.use_nope
+        )?;
+        
+        // Update logits processor with builder settings
+        service.logits_processor = LogitsProcessor::new(
+            self.seed,
+            Some(self.temperature),
+            self.top_p,
+        );
+        
+        Ok(service)
     }
 }
