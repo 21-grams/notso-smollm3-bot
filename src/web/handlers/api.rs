@@ -1,13 +1,11 @@
 //! API endpoint handlers
 
 use crate::state::AppState;
-// use crate::services::template::ChatTemplateService; // Currently unused
 use crate::services::streaming::StreamingBuffer;
 use crate::types::events::StreamEvent;
 use axum::{
     extract::{State, Path, Form},
     response::{Html, sse::{Event, Sse, KeepAlive}},
-    // http::StatusCode, // Currently unused
 };
 use futures::stream::{Stream, StreamExt};
 use serde::{Deserialize, Serialize};

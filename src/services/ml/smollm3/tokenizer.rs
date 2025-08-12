@@ -82,7 +82,7 @@ impl SmolLM3Tokenizer {
         let mut special_tokens = SpecialTokens::default();
         
         if special_tokens_path.exists() {
-            let special_str = fs::read_to_string(&special_tokens_path)?;
+            let _special_str = fs::read_to_string(&special_tokens_path)?;
             // Parse and update special_tokens if needed
             // For now, using defaults
         }

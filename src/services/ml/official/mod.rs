@@ -4,7 +4,6 @@ pub mod gguf_loader;
 pub mod loader;
 pub mod model;
 pub mod quantized_model;
-pub mod llama_forward;
 
 use serde::{Deserialize, Serialize};
 

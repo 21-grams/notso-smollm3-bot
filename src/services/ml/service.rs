@@ -1,6 +1,6 @@
 //! ML Service that orchestrates SmolLM3 model with batch tokenization
 
-use candle_core::{Device, Result, Tensor, IndexOp};
+use candle_core::{Device, IndexOp, Result, Tensor};
 use candle_transformers::generation::LogitsProcessor;
 use std::path::Path;
 
