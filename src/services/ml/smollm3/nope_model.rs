@@ -106,6 +106,9 @@ impl NopeModel {
     
     /// Forward pass through the model
     pub fn forward(&mut self, input_ids: &Tensor, position: usize) -> Result<Tensor> {
+        tracing::info!("=== NopeModel::forward START ===");
+        tracing::info!("Input tensor shape: {:?}", input_ids.dims());
+        
         // Handle both 1D and 2D input
         let (input_ids, batch_size, seq_len) = match input_ids.dims() {
             &[seq] => {
@@ -120,14 +123,19 @@ impl NopeModel {
             _ => return Err(candle_core::Error::Msg("Invalid input dimensions".to_string())),
         };
         
-        tracing::debug!("NoPE forward pass: position={}, seq_len={}, batch={}", position, seq_len, batch_size);
+        tracing::info!("After input processing: batch={}, seq_len={}, flat_shape={:?}", 
+                      batch_size, seq_len, input_ids.dims());
         
         // Token embeddings - index_select expects 1D indices
-        let mut hidden_states = self.embed_tokens.dequantize(&self.device)?;
-        hidden_states = hidden_states.index_select(&input_ids, 0)?;
+        let embed_weight = self.embed_tokens.dequantize(&self.device)?;
+        tracing::info!("Embedding weight shape: {:?}", embed_weight.dims());
+        
+        let mut hidden_states = embed_weight.index_select(&input_ids, 0)?;
+        tracing::info!("After embedding lookup: {:?}", hidden_states.dims());
         
         // Reshape to [batch_size, seq_len, hidden_size] after embedding lookup
         hidden_states = hidden_states.reshape((batch_size, seq_len, self.config.base.hidden_size))?;
+        tracing::info!("After reshape: {:?}", hidden_states.dims());
         
         // Pass through transformer layers
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
@@ -136,16 +144,27 @@ impl NopeModel {
                 tracing::trace!("Processing NoPE layer {}", layer_idx);
             }
             
+            tracing::info!("Processing layer {}", layer_idx);
+            
             // Get cache for this layer
             let cache = self.kv_cache.get_mut(layer_idx);
             
-            hidden_states = layer.forward(
+            match layer.forward(
                 &hidden_states,
                 &self.rotary_emb,
                 cache,
                 position,
                 layer_idx,
-            )?;
+            ) {
+                Ok(output) => {
+                    tracing::info!("Layer {} output shape: {:?}", layer_idx, output.dims());
+                    hidden_states = output;
+                }
+                Err(e) => {
+                    tracing::error!("ERROR in layer {}: {}", layer_idx, e);
+                    return Err(e);
+                }
+            }
         }
         
         // Final norm
@@ -189,10 +208,10 @@ impl NopeLayer {
         let prefix = format!("blk.{}", layer_idx);
         
         // Load attention
-        let self_attn = NopeAttention::load(tensors, &prefix, config)?;
+        let self_attn = NopeAttention::load(tensors, &prefix, config, device)?;
         
         // Load MLP
-        let mlp = Mlp::load(tensors, &prefix)?;
+        let mlp = Mlp::load(tensors, &prefix, device)?;
         
         // Load layer norms with GGUF naming
         let input_norm_weight = tensors.get(&format!("{}.attn_norm.weight", prefix))
@@ -263,6 +282,7 @@ impl NopeAttention {
         tensors: &HashMap<String, Arc<QTensor>>,
         prefix: &str,
         config: &crate::services::ml::official::config::SmolLM3Config,
+        _device: &Device,
     ) -> Result<Self> {
         // GGUF uses simplified names: attn_q, attn_k, attn_v, attn_output
         let q_proj = tensors.get(&format!("{}.attn_q.weight", prefix))
@@ -303,8 +323,17 @@ impl NopeAttention {
         let (batch_size, seq_len, _hidden_size) = hidden_states.dims3()?;
         let device = hidden_states.device();
         
+        tracing::debug!("Attention layer {} - input shape: {:?}", layer_idx, hidden_states.dims());
+        
         // Project Q, K, V
-        let q = hidden_states.matmul(&self.q_proj.dequantize(device)?.t()?)?;
+        let q_weight = self.q_proj.dequantize(device)?;
+        tracing::debug!("Q weight shape before transpose: {:?}", q_weight.dims());
+        let q_weight_t = q_weight.t()?;
+        tracing::debug!("Q weight shape after transpose: {:?}", q_weight_t.dims());
+        
+        let q = hidden_states.matmul(&q_weight_t)?;
+        tracing::debug!("Q projection output shape: {:?}", q.dims());
+        
         let k = hidden_states.matmul(&self.k_proj.dequantize(device)?.t()?)?;
         let v = hidden_states.matmul(&self.v_proj.dequantize(device)?.t()?)?;
         
@@ -405,6 +434,7 @@ impl Mlp {
     fn load(
         tensors: &HashMap<String, Arc<QTensor>>,
         prefix: &str,
+        _device: &Device,
     ) -> Result<Self> {
         // GGUF uses ffn_gate, ffn_up, ffn_down
         let gate_proj = tensors.get(&format!("{}.ffn_gate.weight", prefix))
@@ -429,7 +459,15 @@ impl Mlp {
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
         let device = hidden_states.device();
         
-        let gate = hidden_states.matmul(&self.gate_proj.dequantize(device)?.t()?)?;
+        tracing::debug!("MLP forward - input shape: {:?}", hidden_states.dims());
+        
+        let gate_weight = self.gate_proj.dequantize(device)?;
+        tracing::debug!("Gate weight shape before transpose: {:?}", gate_weight.dims());
+        let gate_weight_t = gate_weight.t()?;
+        tracing::debug!("Gate weight shape after transpose: {:?}", gate_weight_t.dims());
+        
+        let gate = hidden_states.matmul(&gate_weight_t)?;
+        tracing::debug!("Gate projection output shape: {:?}", gate.dims());
         let gate = gate.silu()?;
         
         let up = hidden_states.matmul(&self.up_proj.dequantize(device)?.t()?)?;

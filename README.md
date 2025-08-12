@@ -29,30 +29,34 @@ A high-performance Rust chatbot implementing SmolLM3-3B (Q4_K_M quantized) with 
 - **Maintainability**: Type-safe Rust with comprehensive error handling
 - **Extensibility**: Easy to add new features without breaking existing code
 
-## 📊 Current Status (August 11, 2025)
+## 📊 Current Status (August 12, 2025)
 
-### ✅ Major Milestone: Generation Loop Implemented!
+### ✅ Complete Tokenizer Pipeline Implemented!
+
+**Latest Achievement:**
+- ✅ **Tokenizer Pipeline**: Full preprocessing chain with type-safe builder pattern
+- ✅ **Batch Encoding**: Consistent batch format for all inputs (including batch_size=1)
+- ✅ **Template System**: Jinja2 integration with custom functions (strftime_now)
+- ✅ **Error Boundaries**: Clean separation between service and ML layers
 
 **What's Working:**
 - ✅ **Model Loading**: Q4_K_M quantized model loads all 326 tensors successfully
-- ✅ **Token Generation**: Complete autoregressive generation with proper position tracking
-- ✅ **Streaming**: Real-time token streaming to web interface via SSE + HTMX
+- ✅ **Tokenizer Processing**: Complete pipeline from user input to batch tokens
+- ✅ **Template Rendering**: SmolLM3 official template with metadata and reasoning modes
 - ✅ **NoPE Layers**: Properly handled during generation (layers 3,7,11,15,19,23,27,31,35)
-- ✅ **Thinking Mode**: Special token detection and filtering implemented
-- ✅ **KV Cache**: Efficient caching with proper reset between generations
 - ✅ **Web Interface**: Full HTMX-based chat UI with markdown rendering
+- ✅ **Streaming**: Real-time token streaming to web interface via SSE
 
-**Performance Metrics:**
-- Token Generation: ~1-2 tokens/sec (CPU), ~5-10 tokens/sec (GPU)
-- Memory Usage: ~3-4GB for Q4_K_M model
-- First Token Latency: 1-2 seconds
-- Max Context: 65,536 tokens
+**Processing Pipeline:**
+```
+User Input → Sanitize → Filter → Apply Template → Batch Encode → Model Forward
+```
 
 **Next Steps:**
-- 🔄 Optimize sampling with repetition penalty
-- 🔄 Add beam search as alternative to sampling
-- 🔄 Implement conversation memory with SQLite FTS5
-- 🔄 Add /think command for reasoning mode
+- 🔄 Test end-to-end generation with new tokenizer
+- 🔄 Implement real sanitization and filtering logic
+- 🔄 Add conversation history management
+- 🔄 Optimize generation loop performance
 
 ## 🤖 SmolLM3 Model Features
 
