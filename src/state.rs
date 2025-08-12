@@ -18,11 +18,15 @@ impl AppState {
         let config = Config::from_env()?;
         
         // Try to load ML service, but don't fail if it doesn't work
-        let template_path = "models/smollm3_thinking_chat_template.jinja2".to_string();
+        // Tokenizer directory is the parent of the model file
+        let tokenizer_dir = config.model_path
+            .rsplit_once('/')
+            .map(|(dir, _)| dir.to_string())
+            .unwrap_or_else(|| "models".to_string());
+        
         let ml_service = match MLService::new(
             &config.model_path,
-            &config.tokenizer_path,
-            &template_path,
+            &tokenizer_dir,
             config.to_candle_device(),
         ) {
             Ok(service) => {

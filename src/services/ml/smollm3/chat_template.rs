@@ -1,13 +1,7 @@
 //! Chat template formatting for SmolLM3
 
 use minijinja::{Environment, context};
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-}
+use super::tokenizer::ChatMessage;  // Use ChatMessage from tokenizer module
 
 pub struct ChatTemplate {
     env: Environment<'static>,

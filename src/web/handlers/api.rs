@@ -262,8 +262,8 @@ async fn generate_response_buffered(
     let mut ml_service = state.model.write().await;
     match ml_service.as_mut() {
         Some(service) => {
-            // Try to use the model
-            if let Err(e) = service.generate_streaming(&message, &mut buffer).await {
+            // Try to use the model with thinking mode enabled by default
+            if let Err(e) = service.generate_streaming(&message, &mut buffer, true).await {
                 // Model failed, stream fallback message with markdown
                 let error_msg = format!("⚠️ **Model generation failed**\n\n\
                                         Error: {}\n\n\
