@@ -93,26 +93,40 @@ impl SmolLM3Generator {
         buffer: &mut StreamingBuffer,
         max_tokens: usize,
     ) -> anyhow::Result<String> {
+        tracing::info!("[GENERATION] Starting generate_with_buffer");
+        tracing::info!("[GENERATION] Prompt length: {} chars, max_tokens: {}", prompt.len(), max_tokens);
+        
         // 1. Tokenize input
+        tracing::info!("[GENERATION] Tokenizing input...");
         let encoding = self.tokenizer.encode(prompt, false)
             .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
         let input_ids = encoding.get_ids().to_vec();
+        tracing::info!("[GENERATION] Tokenized {} tokens", input_ids.len());
+        tracing::debug!("[GENERATION] First 10 tokens: {:?}", &input_ids[..input_ids.len().min(10)]);
         
         // 2. Generation loop with streaming
         let tokens = input_ids.clone();
         let accumulated_text = String::new();
         
+        tracing::info!("[GENERATION] Entering generation loop for {} steps", max_tokens);
         for step in 0..max_tokens {
+            tracing::debug!("[GENERATION] Step {}/{}", step + 1, max_tokens);
             // Create input tensor
+            tracing::trace!("[GENERATION] Creating input tensor for step {}", step);
             let _input_tensor = self.create_input_tensor(&tokens, step)?;
+            tracing::trace!("[GENERATION] Input tensor created with shape: {:?}", _input_tensor.dims());
             
             // Forward pass with mutex lock
+            tracing::debug!("[GENERATION] Attempting forward pass at step {}", step);
             #[allow(unused_variables)]
             let logits = {
+                tracing::trace!("[GENERATION] Acquiring model lock...");
                 let _model_arc = self.model.lock().await;
+                tracing::trace!("[GENERATION] Model lock acquired");
                 // We need to call forward on the model inside the Arc
                 // This is a limitation - we can't mutate through Arc
                 // For now, return an error to indicate this needs refactoring
+                tracing::error!("[GENERATION] Arc<Model> limitation hit - needs refactoring");
                 return Err(anyhow::anyhow!("Model forward pass needs refactoring for Arc<Model>"));
             };
             
@@ -166,10 +180,15 @@ impl SmolLM3Generator {
         sender: UnboundedSender<StreamEvent>,
         max_tokens: usize,
     ) -> anyhow::Result<String> {
+        tracing::info!("[GENERATION] Starting generate_stream (legacy)");
+        tracing::info!("[GENERATION] Prompt length: {} chars, max_tokens: {}", prompt.len(), max_tokens);
+        
         // 1. Tokenize input
+        tracing::info!("[GENERATION] Tokenizing input...");
         let encoding = self.tokenizer.encode(prompt, false)
             .map_err(|e| anyhow::anyhow!("Tokenizer error: {}", e))?;
         let input_ids = encoding.get_ids().to_vec();
+        tracing::info!("[GENERATION] Tokenized {} tokens", input_ids.len());
         
         // 2. Generation loop with streaming
         let tokens = input_ids.clone();

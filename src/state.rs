@@ -15,7 +15,11 @@ pub struct AppState {
 
 impl AppState {
     pub async fn new() -> Result<Self> {
+        tracing::info!("[STATE] Initializing AppState...");
         let config = Config::from_env()?;
+        tracing::info!("[STATE] Config loaded:");
+        tracing::info!("[STATE]   Model path: {}", config.model_path);
+        tracing::info!("[STATE]   Device: {:?}", config.device);
         
         // Try to load ML service, but don't fail if it doesn't work
         // Tokenizer directory is the parent of the model file
@@ -24,18 +28,21 @@ impl AppState {
             .map(|(dir, _)| dir.to_string())
             .unwrap_or_else(|| "models".to_string());
         
+        tracing::info!("[STATE] Tokenizer directory: {}", tokenizer_dir);
+        tracing::info!("[STATE] Attempting to load ML service...");
+        
         let ml_service = match MLService::new(
             &config.model_path,
             &tokenizer_dir,
             config.to_candle_device(),
         ) {
             Ok(service) => {
-                tracing::info!("✅ Model loaded successfully");
+                tracing::info!("[STATE] ✅ Model loaded successfully");
                 Some(service)
             }
             Err(e) => {
-                tracing::warn!("⚠️ Model not available: {}", e);
-                tracing::info!("🌐 Server will start without model inference");
+                tracing::error!("[STATE] ⚠️ Model loading failed: {}", e);
+                tracing::info!("[STATE] 🌐 Server will start without model inference");
                 None
             }
         };

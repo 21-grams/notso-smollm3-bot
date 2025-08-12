@@ -38,9 +38,12 @@ impl MLService {
         buffer: &mut crate::services::StreamingBuffer,
         thinking_enabled: bool,
     ) -> anyhow::Result<()> {
-        tracing::info!("🔄 Starting streaming generation with thinking={}", thinking_enabled);
+        let start_time = std::time::Instant::now();
+        tracing::info!("[SERVICE] ===== Starting streaming generation =====");
+        tracing::info!("[SERVICE] Input length: {} chars, thinking: {}", user_input.len(), thinking_enabled);
         
         // 1. Process input through tokenizer pipeline
+        tracing::info!("[SERVICE] Processing input through tokenizer...");
         let token_batch = self.tokenizer
             .process_input(user_input.to_string(), thinking_enabled)
             .map_err(|e| anyhow::anyhow!("Tokenizer processing error: {}", e))?;
@@ -55,7 +58,8 @@ impl MLService {
         }
         
         let prompt_len = tokens.len();
-        tracing::debug!("📝 Prompt tokenized: {} tokens", prompt_len);
+        tracing::info!("[SERVICE] Tokenization complete: {} tokens", prompt_len);
+        tracing::debug!("[SERVICE] First 10 tokens: {:?}", &tokens[..tokens.len().min(10)]);
         
         // 2. Initialize generation state
         let mut all_tokens = tokens.clone();
@@ -71,36 +75,52 @@ impl MLService {
         
         // 3. Process the prompt (prefill phase)
         // Create batch tensor [1, seq_len] for consistency
+        tracing::info!("[SERVICE] Creating input tensor from {} tokens", tokens.len());
         let input_tensor = Tensor::new(&tokens[..], &self.device)?
             .unsqueeze(0)?;  // Add batch dimension
         
-        tracing::debug!("📥 Running prefill for {} tokens with shape {:?}", 
-                       prompt_len, input_tensor.dims());
+        tracing::info!("[SERVICE] Running prefill phase with tensor shape: {:?}", input_tensor.dims());
+        tracing::info!("[SERVICE] Device: {:?}, Position: {}", self.device, position);
         
+        let prefill_start = std::time::Instant::now();
         let prompt_logits = match &mut self.model {
             ModelBackend::Standard(m) => {
+                tracing::info!("[SERVICE] Using Standard backend for forward pass");
                 m.forward(&input_tensor, position, Some(&mut self.kv_cache))?
             },
             ModelBackend::Nope(m) => {
+                tracing::info!("[SERVICE] Using NoPE backend for forward pass");
                 m.forward(&input_tensor, position)?
             }
         };
+        tracing::info!("[SERVICE] Prefill forward pass completed in {:?}", prefill_start.elapsed());
+        tracing::info!("[SERVICE] Prompt logits shape: {:?}", prompt_logits.dims());
         
         // Get last token's logits
         // Expected shape: [batch, seq_len, vocab_size]
+        tracing::debug!("[SERVICE] Extracting last token logits from position {}", prompt_logits.dim(1)? - 1);
         let mut last_logits = prompt_logits.i((0, prompt_logits.dim(1)? - 1, ..))?;
+        tracing::debug!("[SERVICE] Last logits shape: {:?}", last_logits.dims());
         
         // Update position to end of prompt
         position = prompt_len;
-        tracing::debug!("📍 Position after prefill: {}", position);
+        tracing::info!("[SERVICE] Position after prefill: {}", position);
         
         // 4. Generation loop
         let mut generated_count = 0;
         let mut consecutive_newlines = 0;
         
+        tracing::info!("[SERVICE] Starting generation loop for max {} tokens", max_tokens);
+        
         for step in 0..max_tokens {
+            if step == 0 || step % 10 == 0 {
+                tracing::info!("[SERVICE] Generation step {}/{}", step, max_tokens);
+            }
+            
             // 4a. Sample next token from logits
+            tracing::trace!("[SERVICE] Sampling from logits with shape: {:?}", last_logits.dims());
             let next_token = self.logits_processor.sample(&last_logits)?;
+            tracing::trace!("[SERVICE] Sampled token: {}", next_token);
             all_tokens.push(next_token);
             
             // 4b. Check for stop conditions
@@ -145,23 +165,30 @@ impl MLService {
             
             // 4e. Prepare next token input
             // Keep batch dimension [1, 1]
+            tracing::trace!("[SERVICE] Creating next input tensor for token {}", next_token);
             let next_input = Tensor::new(&[next_token], &self.device)?
                 .unsqueeze(0)?;  // Add batch dimension
             
-            tracing::trace!("🔮 Generating token {} at position {}", step + 1, position);
+            tracing::debug!("[SERVICE] Running forward pass for step {} at position {}", step + 1, position);
             
+            let step_start = std::time::Instant::now();
             let logits = match &mut self.model {
                 ModelBackend::Standard(m) => {
+                    tracing::trace!("[SERVICE] Using Standard backend");
                     m.forward(&next_input, position, Some(&mut self.kv_cache))?
                 },
                 ModelBackend::Nope(m) => {
+                    tracing::trace!("[SERVICE] Using NoPE backend");
                     m.forward(&next_input, position)?
                 }
             };
+            tracing::trace!("[SERVICE] Forward pass for step {} completed in {:?}", step, step_start.elapsed());
             
             // Update for next iteration
+            tracing::trace!("[SERVICE] Extracting logits for next iteration");
             last_logits = logits.i((0, 0, ..))?;
             position += 1;
+            tracing::trace!("[SERVICE] Updated position to {}", position);
             
             if position >= 65536 {
                 tracing::warn!("Reached maximum context length");
@@ -170,16 +197,22 @@ impl MLService {
         }
         
         // 5. Complete the stream
+        tracing::info!("[SERVICE] Completing stream...");
         buffer.complete().await
             .map_err(|e| anyhow::anyhow!("Buffer completion error: {}", e))?;
         
         // 6. Reset caches for next generation
+        tracing::debug!("[SERVICE] Resetting caches for next generation");
         self.kv_cache.reset();
         if let ModelBackend::Nope(m) = &mut self.model {
             m.reset_cache();
         }
         
-        tracing::info!("✅ Generated {} visible tokens", generated_count);
+        let total_time = start_time.elapsed();
+        tracing::info!("[SERVICE] ✅ Generation complete!");
+        tracing::info!("[SERVICE]   - Generated {} visible tokens", generated_count);
+        tracing::info!("[SERVICE]   - Total time: {:?}", total_time);
+        tracing::info!("[SERVICE]   - Tokens/sec: {:.2}", generated_count as f64 / total_time.as_secs_f64());
         Ok(())
     }
     
@@ -197,20 +230,31 @@ impl MLService {
         device: Device,
         use_nope: bool,
     ) -> Result<Self> {
-        tracing::info!("Initializing ML service with NoPE={}", use_nope);
+        tracing::info!("[ML_SERVICE] Initializing ML service");
+        tracing::info!("[ML_SERVICE]   Model path: {:?}", model_path.as_ref());
+        tracing::info!("[ML_SERVICE]   Tokenizer dir: {:?}", tokenizer_dir.as_ref());
+        tracing::info!("[ML_SERVICE]   Device: {:?}", device);
+        tracing::info!("[ML_SERVICE]   Use NoPE: {}", use_nope);
         
         // Load tokenizer from directory containing all config files
+        tracing::info!("[ML_SERVICE] Loading tokenizer...");
         let tokenizer = SmolLM3Tokenizer::from_files(tokenizer_dir.as_ref())
-            .map_err(|e| candle_core::Error::Msg(format!("Tokenizer load failed: {}", e)))?;
+            .map_err(|e| {
+                tracing::error!("[ML_SERVICE] Tokenizer load failed: {}", e);
+                candle_core::Error::Msg(format!("Tokenizer load failed: {}", e))
+            })?;
+        tracing::info!("[ML_SERVICE] Tokenizer loaded successfully");
         
         // Load model
+        tracing::info!("[ML_SERVICE] Loading model...");
         let model = if use_nope {
-            tracing::info!("Loading NoPE-aware model");
+            tracing::info!("[ML_SERVICE] Loading NoPE-aware model from GGUF");
             ModelBackend::Nope(NopeModel::from_gguf(&model_path, &device)?)
         } else {
-            tracing::info!("Loading standard model");
+            tracing::info!("[ML_SERVICE] Loading standard model from GGUF");
             ModelBackend::Standard(SmolLM3Model::from_gguf(&model_path, &device)?)
         };
+        tracing::info!("[ML_SERVICE] Model loaded successfully");
         
         // Initialize KV cache
         // Get config for cache dimensions

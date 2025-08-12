@@ -86,6 +86,10 @@ impl NopeModel {
     }
 
     pub fn forward(&mut self, input_ids: &Tensor, position: usize) -> Result<Tensor> {
+        let start_time = std::time::Instant::now();
+        tracing::info!("[NOPE_MODEL] ===== Starting forward pass =====");
+        tracing::info!("[NOPE_MODEL] Input shape: {:?}, position: {}", input_ids.dims(), position);
+        
         let (batch_size, seq_len, flat_input) = match input_ids.dims() {
             &[seq] => (1, seq, input_ids.clone()),
             &[batch, seq] => (batch, seq, input_ids.flatten(0, 1)?),
@@ -94,24 +98,51 @@ impl NopeModel {
             )),
         };
 
-        tracing::debug!("NoPE forward: position={}, batch={}, seq_len={}", position, batch_size, seq_len);
+        tracing::info!("[NOPE_MODEL] Batch: {}, Seq len: {}, Device: {:?}", batch_size, seq_len, self.device);
 
+        // Embeddings
+        tracing::debug!("[NOPE_MODEL] Dequantizing embeddings...");
         let embed_weight = self.embed_tokens.dequantize(&self.device)?;
+        tracing::debug!("[NOPE_MODEL] Embeddings dequantized, shape: {:?}", embed_weight.dims());
+        
+        tracing::debug!("[NOPE_MODEL] Selecting embeddings for {:?} tokens", flat_input.dims());
         let mut hidden_states = embed_weight.index_select(&flat_input, 0)?
             .reshape((batch_size, seq_len, self.config.base.hidden_size))?;
+        tracing::info!("[NOPE_MODEL] Initial hidden states shape: {:?}", hidden_states.dims());
 
+        // Layer processing
+        let total_layers = self.layers.len();
+        tracing::info!("[NOPE_MODEL] Processing {} layers", total_layers);
+        
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
-            if self.config.nope_layer_indices.contains(&layer_idx) {
-                tracing::trace!("Processing NoPE layer {}", layer_idx);
+            if layer_idx == 0 || layer_idx % 10 == 0 || layer_idx == total_layers - 1 {
+                tracing::info!("[NOPE_MODEL] Processing layer {}/{}", layer_idx + 1, total_layers);
+                let layer_start = std::time::Instant::now();
+                
+                if self.config.nope_layer_indices.contains(&layer_idx) {
+                    tracing::info!("[NOPE_MODEL]   -> Layer {} is NoPE (no position encoding)", layer_idx);
+                }
+                
+                let cache = self.kv_cache.get_mut(layer_idx);
+                hidden_states = layer.forward(&hidden_states, &self.rotary_emb, cache, position, layer_idx)?;
+                
+                tracing::debug!("[NOPE_MODEL]   Layer {} completed in {:?}", layer_idx, layer_start.elapsed());
+            } else {
+                // Process without detailed logging
+                let cache = self.kv_cache.get_mut(layer_idx);
+                hidden_states = layer.forward(&hidden_states, &self.rotary_emb, cache, position, layer_idx)?;
             }
-            let cache = self.kv_cache.get_mut(layer_idx);
-            hidden_states = layer.forward(&hidden_states, &self.rotary_emb, cache, position, layer_idx)?;
         }
-
+        
+        tracing::info!("[NOPE_MODEL] All layers processed, applying final norm...");
         hidden_states = self.norm.forward(&hidden_states)?;
+        tracing::debug!("[NOPE_MODEL] Final norm applied, shape: {:?}", hidden_states.dims());
+        
+        tracing::info!("[NOPE_MODEL] Applying lm_head projection...");
         let logits = self.lm_head.forward(&hidden_states)?;
-
-        tracing::debug!("Logits shape: {:?}", logits.dims());
+        
+        tracing::info!("[NOPE_MODEL] ✅ Forward pass complete in {:?}", start_time.elapsed());
+        tracing::info!("[NOPE_MODEL] Final logits shape: {:?}", logits.dims());
         Ok(logits)
     }
 
@@ -168,13 +199,37 @@ impl NopeLayer {
         position: usize,
         layer_idx: usize,
     ) -> Result<Tensor> {
+        if layer_idx == 0 {
+            tracing::trace!("[LAYER_0] Starting layer forward, input shape: {:?}", hidden_states.dims());
+        }
+        
         let residual = hidden_states;
         let hidden_states = self.input_layernorm.forward(hidden_states)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[LAYER_0] After input norm, shape: {:?}", hidden_states.dims());
+        }
+        
         let attn_output = self.self_attn.forward(&hidden_states, rotary_emb, cache, position, layer_idx)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[LAYER_0] After attention, shape: {:?}", attn_output.dims());
+        }
+        
         let hidden_states = (residual + attn_output)?;
         let residual = &hidden_states;
         let hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[LAYER_0] After post-attn norm, shape: {:?}", hidden_states.dims());
+        }
+        
         let mlp_output = self.mlp.forward(&hidden_states)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[LAYER_0] After MLP, shape: {:?}", mlp_output.dims());
+        }
+        
         Ok((residual + mlp_output)?)
     }
 }
@@ -229,12 +284,22 @@ impl NopeAttention {
         layer_idx: usize,
     ) -> Result<Tensor> {
         let (batch_size, seq_len, _hidden_size) = hidden_states.dims3()?;
-        tracing::trace!("Attention forward: batch={}, seq={}, layer={}", batch_size, seq_len, layer_idx);
+        
+        if layer_idx == 0 {
+            tracing::debug!("[ATTN_0] Starting attention, batch={}, seq={}", batch_size, seq_len);
+        }
 
         // Project Q, K, V using QMatMul
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Projecting Q, K, V...");
+        }
         let q = self.q_proj.forward(hidden_states)?;
         let k = self.k_proj.forward(hidden_states)?;
         let v = self.v_proj.forward(hidden_states)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Q/K/V projected, reshaping...");
+        }
 
         let q = q.reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
@@ -243,7 +308,14 @@ impl NopeAttention {
         let v = v.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Applying rotary embeddings...");
+        }
         let (q, k) = rotary_emb.apply(&q, &k, position, layer_idx)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Rotary embeddings applied");
+        }
 
         let (k, v) = if let Some(cache_ref) = cache {
             match cache_ref {
@@ -266,16 +338,39 @@ impl NopeAttention {
         let v = self.repeat_kv(&v)?;
 
         let scale = 1.0 / (self.head_dim as f64).sqrt();
+        
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Computing attention scores...");
+        }
         let scores = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * scale)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Creating causal mask...");
+        }
         let mask = self.make_causal_mask(seq_len, hidden_states.device())?;
         let scores = scores.broadcast_add(&mask)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Applying softmax...");
+        }
         let attn_weights = candle_nn::ops::softmax_last_dim(&scores)?;
+        
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Computing attention output...");
+        }
         let attn_output = attn_weights.matmul(&v)?;
         let attn_output = attn_output.transpose(1, 2)?
             .contiguous()?
             .reshape((batch_size, seq_len, self.num_heads * self.head_dim))?;
 
+        if layer_idx == 0 {
+            tracing::trace!("[ATTN_0] Applying output projection...");
+        }
         let output = self.o_proj.forward(&attn_output)?;
+        
+        if layer_idx == 0 {
+            tracing::debug!("[ATTN_0] ✅ Attention complete, output shape: {:?}", output.dims());
+        }
         Ok(output)
     }
 
@@ -290,11 +385,32 @@ impl NopeAttention {
             .reshape((batch_size, num_kv_heads * repeat_count, seq_len, head_dim))
     }
 
+    /// Creates a causal mask for self-attention.
+    /// 
+    /// Returns a mask of shape [seq_len, seq_len] where:
+    /// - Valid positions (can attend) have value 0.0
+    /// - Masked positions (cannot attend) have value -inf
+    /// 
+    /// Uses U8 dtype for initial mask creation to avoid where_cond dtype limitations,
+    /// then converts to F32 using arithmetic operations for backend compatibility.
     fn make_causal_mask(&self, seq_len: usize, device: &Device) -> Result<Tensor> {
-        let mask = Tensor::tril2(seq_len, DType::F32, device)?;
+        // Create lower triangular mask with U8 dtype (1s and 0s)
+        let mask = Tensor::tril2(seq_len, DType::U8, device)?;
+        
+        // Convert to F32 for numerical operations
+        let mask_f32 = mask.to_dtype(DType::F32)?;
+        
+        // Create boolean mask where original mask was 0 (upper triangle)
         let zeros = Tensor::zeros((seq_len, seq_len), DType::F32, device)?;
-        let neg_inf = Tensor::full(f32::NEG_INFINITY, (seq_len, seq_len), device)?;
-        let causal_mask = mask.where_cond(&zeros, &neg_inf)?;
+        let is_masked = mask_f32.eq(&zeros)?;
+        
+        // Convert boolean mask to -inf where true, 0 where false
+        let neg_inf_value = Tensor::full(f32::NEG_INFINITY, (seq_len, seq_len), device)?;
+        let causal_mask = is_masked.to_dtype(DType::F32)? * neg_inf_value;
+        
+        // Ensure valid positions remain 0.0 (defensive programming)
+        let causal_mask = causal_mask?.maximum(0.0)?;
+        
         Ok(causal_mask)
     }
 }
@@ -329,6 +445,7 @@ impl Mlp {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
+        // Only log for debugging specific issues
         let gate = self.gate_proj.forward(hidden_states)?.silu()?;
         let up = self.up_proj.forward(hidden_states)?;
         let intermediate = (gate * up)?;

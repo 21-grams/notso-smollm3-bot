@@ -249,21 +249,32 @@ async fn generate_response_buffered(
     message: String,
     message_id: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("[HANDLER] generate_response_buffered called");
+    tracing::info!("[HANDLER] Session: {}, Message ID: {}", session_id, message_id);
+    tracing::info!("[HANDLER] Message: '{}'"   , message);
+    
     // Get session's event sender
+    tracing::debug!("[HANDLER] Getting session sender...");
     let sender = {
         let mut sessions = state.sessions.write().await;
         sessions.get_or_create_sender(&session_id)
     };
     
     // Create streaming buffer with the provided message ID
+    tracing::debug!("[HANDLER] Creating streaming buffer");
     let mut buffer = StreamingBuffer::new(sender, message_id.clone());
     
     // Check if model is available and generate accordingly
+    tracing::info!("[HANDLER] Acquiring model lock...");
     let mut ml_service = state.model.write().await;
+    tracing::info!("[HANDLER] Model lock acquired");
+    
     match ml_service.as_mut() {
         Some(service) => {
+            tracing::info!("[HANDLER] Model available, calling generate_streaming");
             // Try to use the model with thinking mode enabled by default
             if let Err(e) = service.generate_streaming(&message, &mut buffer, true).await {
+                tracing::error!("[HANDLER] Model generation failed: {}", e);
                 // Model failed, stream fallback message with markdown
                 let error_msg = format!("⚠️ **Model generation failed**\n\n\
                                         Error: {}\n\n\
