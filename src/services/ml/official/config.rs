@@ -1,8 +1,34 @@
-//! SmolLM3-specific configuration extending Llama config
+//! SmolLM3-specific configuration with YaRN scaling and Flash Attention support
 
 use candle_core::Result;
 use candle_core::quantized::gguf_file::Content;
+use serde::{Deserialize, Serialize};
 use super::ThinkingTokens;
+
+/// RoPE scaling configuration for extended context
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct RopeScaling {
+    pub scaling_type: String,  // "yarn", "linear", "dynamic"
+    pub factor: f64,           // e.g., 2.0 for 2x context
+    pub original_max_position_embeddings: usize,
+    pub attention_factor: Option<f64>,
+    pub beta_fast: Option<f64>,
+    pub beta_slow: Option<f64>,
+}
+
+impl RopeScaling {
+    /// Create YaRN scaling configuration
+    pub fn yarn(factor: f64, original_max_pos: usize) -> Self {
+        Self {
+            scaling_type: "yarn".to_string(),
+            factor,
+            original_max_position_embeddings: original_max_pos,
+            attention_factor: Some(1.0),
+            beta_fast: Some(32.0),
+            beta_slow: Some(1.0),
+        }
+    }
+}
 
 /// Base Llama-style configuration for SmolLM3
 #[derive(Clone, Debug)]
@@ -18,7 +44,7 @@ pub struct LlamaConfig {
     pub use_flash_attn: bool,
     pub head_dim: usize,
     pub tie_word_embeddings: bool,
-    pub rope_scaling: Option<()>,  // Simplified for now
+    pub rope_scaling: Option<RopeScaling>,
     pub max_position_embeddings: usize,
 }
 
@@ -38,6 +64,12 @@ pub struct SmolLM3Config {
     pub nope_layer_indices: Vec<usize>,
     /// Alias for compatibility
     pub nope_layers: Vec<usize>,
+    /// Enable Flash Attention 2 (GPU only)
+    pub use_flash_attention: bool,
+    /// KV-cache size (defaults to max_position_embeddings)
+    pub kv_cache_size: usize,
+    /// RoPE scaling configuration
+    pub rope_scaling: Option<RopeScaling>,
 }
 
 impl SmolLM3Config {
@@ -52,9 +84,9 @@ impl SmolLM3Config {
             num_key_value_heads: 4, // GQA with 4:1 ratio
             rms_norm_eps: 1e-5,
             rope_theta: 5000000.0, // Extended context RoPE
-            use_flash_attn: false, // Not yet supported in Candle
+            use_flash_attn: cfg!(feature = "flash-attn"),
             head_dim: 128, // 2048 / 16
-            tie_word_embeddings: false,
+            tie_word_embeddings: true, // Tied embeddings for memory efficiency
             rope_scaling: None,
             max_position_embeddings: 65536,
         };
@@ -64,14 +96,34 @@ impl SmolLM3Config {
         let thinking_tokens = ThinkingTokens::default_smollm3();
         
         Self {
-            base,
+            base: base.clone(),
             enable_thinking: true,
             thinking_tokens: thinking_tokens.clone(),
             think_token_id: thinking_tokens.start,
             think_end_token_id: thinking_tokens.end,
             nope_layer_indices: nope_layer_indices.clone(),
             nope_layers: nope_layer_indices,
+            use_flash_attention: base.use_flash_attn,
+            kv_cache_size: base.max_position_embeddings,
+            rope_scaling: None,
         }
+    }
+    
+    /// Create config with YaRN scaling for extended context
+    pub fn with_yarn_scaling(mut self, factor: f64) -> Self {
+        let original_max = self.base.max_position_embeddings;
+        self.rope_scaling = Some(RopeScaling::yarn(factor, original_max));
+        self.base.rope_scaling = self.rope_scaling.clone();
+        self.base.max_position_embeddings = (original_max as f64 * factor) as usize;
+        self.kv_cache_size = self.base.max_position_embeddings;
+        self
+    }
+    
+    /// Enable Flash Attention 2 (requires CUDA)
+    pub fn with_flash_attention(mut self, enable: bool) -> Self {
+        self.use_flash_attention = enable && cfg!(feature = "flash-attn");
+        self.base.use_flash_attn = self.use_flash_attention;
+        self
     }
     
     /// Create config from GGUF metadata
@@ -94,6 +146,27 @@ impl SmolLM3Config {
             .unwrap_or(1e-5) as f64;
         let rope_theta = get_metadata_f32(content, &["llama.rope.freq_base", "rope_theta"])
             .unwrap_or(5000000.0) as f32;
+        let max_position_embeddings = get_metadata_u32(content, &["llama.context_length", "max_position_embeddings"])
+            .unwrap_or(65536) as usize;
+        
+        // Check for RoPE scaling in metadata
+        let rope_scaling = if let Some(scaling_type) = content.metadata.get("rope.scaling.type") {
+            if let candle_core::quantized::gguf_file::Value::String(s) = scaling_type {
+                if s == "yarn" {
+                    if let Some(factor) = get_metadata_f32(content, &["rope.scaling.factor"]) {
+                        Some(RopeScaling::yarn(factor as f64, max_position_embeddings))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         
         let base = LlamaConfig {
             hidden_size,
@@ -104,11 +177,11 @@ impl SmolLM3Config {
             num_key_value_heads,
             rms_norm_eps,
             rope_theta,
-            use_flash_attn: false,
+            use_flash_attn: cfg!(feature = "flash-attn"),
             head_dim: hidden_size / num_attention_heads,
-            tie_word_embeddings: false,
-            rope_scaling: None,
-            max_position_embeddings: 65536,
+            tie_word_embeddings: true,
+            rope_scaling: rope_scaling.clone(),
+            max_position_embeddings,
         };
         
         // NoPE layers for SmolLM3
@@ -116,14 +189,34 @@ impl SmolLM3Config {
         let thinking_tokens = ThinkingTokens::default_smollm3();
         
         Ok(Self {
-            base,
+            base: base.clone(),
             enable_thinking: true,
             thinking_tokens: thinking_tokens.clone(),
             think_token_id: thinking_tokens.start,
             think_end_token_id: thinking_tokens.end,
             nope_layer_indices: nope_layer_indices.clone(),
             nope_layers: nope_layer_indices,
+            use_flash_attention: base.use_flash_attn,
+            kv_cache_size: base.max_position_embeddings,
+            rope_scaling,
         })
+    }
+    
+    /// Get scaled RoPE theta if YaRN scaling is enabled
+    pub fn rope_theta_scaled(&self) -> f32 {
+        if let Some(ref scaling) = self.rope_scaling {
+            if scaling.scaling_type == "yarn" {
+                // YaRN scaling formula
+                let head_dim = self.base.head_dim as f64;
+                (self.base.rope_theta as f64 * scaling.factor.powf(
+                    head_dim / (head_dim - 2.0)
+                )) as f32
+            } else {
+                self.base.rope_theta
+            }
+        } else {
+            self.base.rope_theta
+        }
     }
 }
 

@@ -67,10 +67,9 @@ impl SmolLM3Generator {
         
         let device = model.device().clone();
         let kv_cache = KVCache::new(
-            config.base.num_hidden_layers,  // num_layers
-            2048,  // max_length
-            device.clone()  // device
-        );
+            &config,  // config
+            &device  // device
+        ).expect("Failed to create KV cache");
         
         // Wrap the Arc model in a Mutex for async safety
         // We'll share the Arc instead of cloning the model

@@ -1,0 +1,20 @@
+[build]
+# Enable native CPU optimizations for maximum performance
+# This will use AVX2/AVX512 on x86_64 and NEON on ARM
+rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
+# Use multiple jobs for faster compilation
+jobs = 8
+# Enable incremental compilation for faster rebuilds
+incremental = true
+
+[target.x86_64-unknown-linux-gnu]
+# Additional x86_64 Linux optimizations
+rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3", "-C", "link-arg=-fuse-ld=lld"]
+
+[target.x86_64-pc-windows-msvc]
+# Windows optimizations
+rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]
+
+[target.aarch64-apple-darwin]
+# Apple Silicon optimizations
+rustflags = ["-C", "target-cpu=native", "-C", "opt-level=3"]

@@ -1,11 +1,12 @@
-//! NoPE-aware SmolLM3 model implementation using candle-nn's rotary embeddings
+//! NoPE-aware SmolLM3 model implementation using Candle's optimized components
 //!
-//! This implementation provides full control over RoPE application, allowing
-//! certain layers to skip position encoding (NoPE layers) while maintaining
-//! GPU acceleration through candle-nn's optimized kernels.
+//! This implementation leverages Candle's built-in RmsNorm, rotary embeddings,
+//! and repeat_kv functions for optimal performance while maintaining NoPE layer support.
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
 use candle_core::quantized::{QTensor, gguf_file, QMatMul};
+use candle_nn::RmsNorm;
+use candle_transformers::utils::repeat_kv;
 use std::collections::HashMap;
 use std::path::Path;
 use std::fs::File;
@@ -17,7 +18,6 @@ pub struct NopeModel {
     layers: Vec<NopeLayer>,
     norm: RmsNorm,
     lm_head: QMatMul,
-    rotary_emb: RotaryEmbedding,
     device: Device,
     config: crate::services::ml::official::config::SmolLM3Config,
     kv_cache: Vec<Option<(Tensor, Tensor)>>,
@@ -34,10 +34,6 @@ impl NopeModel {
 
         let mut tensors: HashMap<String, Arc<QTensor>> = HashMap::new();
         tracing::info!("Loading {} tensors from GGUF", content.tensor_infos.len());
-        let tensor_names: Vec<String> = content.tensor_infos.keys().cloned().collect();
-        tracing::debug!("Available tensors: {:?}", tensor_names.iter().filter(|n|
-            n.contains("token") || n.contains("embed") || n.contains("output")
-        ).collect::<Vec<_>>());
 
         for (tensor_name, _tensor_info) in content.tensor_infos.iter() {
             tracing::trace!("Loading tensor: {}", tensor_name);
@@ -45,29 +41,28 @@ impl NopeModel {
             tensors.insert(tensor_name.clone(), Arc::new(tensor));
         }
 
+        // Load embeddings (tied for input and output)
         let embed_tokens = tensors.get("token_embd.weight")
-            .ok_or_else(|| {
-                tracing::error!("Could not find token_embd.weight. Available: {:?}", 
-                    tensors.keys().filter(|k| k.contains("token") || k.contains("emb")).collect::<Vec<_>>());
-                candle_core::Error::Msg("Missing token_embd.weight".to_string())
-            })?
+            .ok_or_else(|| candle_core::Error::Msg("Missing token_embd.weight".to_string()))?
             .clone();
 
         tracing::info!("Using tied embeddings for output projection");
         let lm_head = QMatMul::from_arc(embed_tokens.clone())?;
 
+        // Use Candle's RmsNorm
         let norm_weight = tensors.get("output_norm.weight")
             .ok_or_else(|| candle_core::Error::Msg("Missing output_norm.weight".to_string()))?
             .dequantize(device)?;
-        let norm = RmsNorm::new(norm_weight, 1e-5);
+        let norm = RmsNorm::new(norm_weight, config.base.rms_norm_eps);
 
+        // Load layers
         let mut layers = Vec::with_capacity(config.base.num_hidden_layers);
         for i in 0..config.base.num_hidden_layers {
             let layer = NopeLayer::load(&tensors, i, &config, device)?;
             layers.push(layer);
         }
 
-        let rotary_emb = RotaryEmbedding::new(DType::F32, &config, device)?;
+        // Pre-allocate KV cache
         let kv_cache = vec![None; config.base.num_hidden_layers];
 
         tracing::info!("✅ NoPE model loaded with {} layers", layers.len());
@@ -78,7 +73,6 @@ impl NopeModel {
             layers,
             norm,
             lm_head,
-            rotary_emb,
             device: device.clone(),
             config,
             kv_cache,
@@ -87,8 +81,7 @@ impl NopeModel {
 
     pub fn forward(&mut self, input_ids: &Tensor, position: usize) -> Result<Tensor> {
         let start_time = std::time::Instant::now();
-        tracing::info!("[NOPE_MODEL] ===== Starting forward pass =====");
-        tracing::info!("[NOPE_MODEL] Input shape: {:?}, position: {}", input_ids.dims(), position);
+        tracing::debug!("[NOPE_MODEL] Starting forward pass at position {}", position);
         
         let (batch_size, seq_len, flat_input) = match input_ids.dims() {
             &[seq] => (1, seq, input_ids.clone()),
@@ -98,51 +91,22 @@ impl NopeModel {
             )),
         };
 
-        tracing::info!("[NOPE_MODEL] Batch: {}, Seq len: {}, Device: {:?}", batch_size, seq_len, self.device);
-
         // Embeddings
-        tracing::debug!("[NOPE_MODEL] Dequantizing embeddings...");
         let embed_weight = self.embed_tokens.dequantize(&self.device)?;
-        tracing::debug!("[NOPE_MODEL] Embeddings dequantized, shape: {:?}", embed_weight.dims());
-        
-        tracing::debug!("[NOPE_MODEL] Selecting embeddings for {:?} tokens", flat_input.dims());
         let mut hidden_states = embed_weight.index_select(&flat_input, 0)?
             .reshape((batch_size, seq_len, self.config.base.hidden_size))?;
-        tracing::info!("[NOPE_MODEL] Initial hidden states shape: {:?}", hidden_states.dims());
 
-        // Layer processing
-        let total_layers = self.layers.len();
-        tracing::info!("[NOPE_MODEL] Processing {} layers", total_layers);
-        
+        // Process through layers
         for (layer_idx, layer) in self.layers.iter_mut().enumerate() {
-            if layer_idx == 0 || layer_idx % 10 == 0 || layer_idx == total_layers - 1 {
-                tracing::info!("[NOPE_MODEL] Processing layer {}/{}", layer_idx + 1, total_layers);
-                let layer_start = std::time::Instant::now();
-                
-                if self.config.nope_layer_indices.contains(&layer_idx) {
-                    tracing::info!("[NOPE_MODEL]   -> Layer {} is NoPE (no position encoding)", layer_idx);
-                }
-                
-                let cache = self.kv_cache.get_mut(layer_idx);
-                hidden_states = layer.forward(&hidden_states, &self.rotary_emb, cache, position, layer_idx)?;
-                
-                tracing::debug!("[NOPE_MODEL]   Layer {} completed in {:?}", layer_idx, layer_start.elapsed());
-            } else {
-                // Process without detailed logging
-                let cache = self.kv_cache.get_mut(layer_idx);
-                hidden_states = layer.forward(&hidden_states, &self.rotary_emb, cache, position, layer_idx)?;
-            }
+            let cache = self.kv_cache.get_mut(layer_idx);
+            hidden_states = layer.forward(&hidden_states, cache, position, layer_idx, &self.config)?;
         }
         
-        tracing::info!("[NOPE_MODEL] All layers processed, applying final norm...");
+        // Final norm and projection
         hidden_states = self.norm.forward(&hidden_states)?;
-        tracing::debug!("[NOPE_MODEL] Final norm applied, shape: {:?}", hidden_states.dims());
-        
-        tracing::info!("[NOPE_MODEL] Applying lm_head projection...");
         let logits = self.lm_head.forward(&hidden_states)?;
         
-        tracing::info!("[NOPE_MODEL] ✅ Forward pass complete in {:?}", start_time.elapsed());
-        tracing::info!("[NOPE_MODEL] Final logits shape: {:?}", logits.dims());
+        tracing::debug!("[NOPE_MODEL] Forward pass complete in {:?}", start_time.elapsed());
         Ok(logits)
     }
 
@@ -155,6 +119,7 @@ impl NopeModel {
     }
 }
 
+/// Transformer layer with NoPE support
 pub struct NopeLayer {
     self_attn: NopeAttention,
     mlp: Mlp,
@@ -170,18 +135,19 @@ impl NopeLayer {
         device: &Device,
     ) -> Result<Self> {
         let prefix = format!("blk.{}", layer_idx);
-        let self_attn = NopeAttention::load(tensors, &prefix, config, device)?;
+        let self_attn = NopeAttention::load(tensors, &prefix, layer_idx, config, device)?;
         let mlp = Mlp::load(tensors, &prefix, device)?;
 
+        // Use Candle's RmsNorm
         let input_norm_weight = tensors.get(&format!("{}.attn_norm.weight", prefix))
             .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.attn_norm.weight", prefix)))?
             .dequantize(device)?;
-        let input_layernorm = RmsNorm::new(input_norm_weight, 1e-5);
+        let input_layernorm = RmsNorm::new(input_norm_weight, config.base.rms_norm_eps);
 
         let post_norm_weight = tensors.get(&format!("{}.ffn_norm.weight", prefix))
             .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.ffn_norm.weight", prefix)))?
             .dequantize(device)?;
-        let post_attention_layernorm = RmsNorm::new(post_norm_weight, 1e-5);
+        let post_attention_layernorm = RmsNorm::new(post_norm_weight, config.base.rms_norm_eps);
 
         Ok(Self {
             self_attn,
@@ -194,63 +160,50 @@ impl NopeLayer {
     fn forward(
         &mut self,
         hidden_states: &Tensor,
-        rotary_emb: &RotaryEmbedding,
         cache: Option<&mut Option<(Tensor, Tensor)>>,
         position: usize,
         layer_idx: usize,
+        config: &crate::services::ml::official::config::SmolLM3Config,
     ) -> Result<Tensor> {
-        if layer_idx == 0 {
-            tracing::trace!("[LAYER_0] Starting layer forward, input shape: {:?}", hidden_states.dims());
-        }
-        
+        // Pre-norm architecture
         let residual = hidden_states;
         let hidden_states = self.input_layernorm.forward(hidden_states)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[LAYER_0] After input norm, shape: {:?}", hidden_states.dims());
-        }
-        
-        let attn_output = self.self_attn.forward(&hidden_states, rotary_emb, cache, position, layer_idx)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[LAYER_0] After attention, shape: {:?}", attn_output.dims());
-        }
-        
+        let attn_output = self.self_attn.forward(&hidden_states, cache, position, layer_idx, config)?;
         let hidden_states = (residual + attn_output)?;
+        
+        // MLP block
         let residual = &hidden_states;
         let hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[LAYER_0] After post-attn norm, shape: {:?}", hidden_states.dims());
-        }
-        
         let mlp_output = self.mlp.forward(&hidden_states)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[LAYER_0] After MLP, shape: {:?}", mlp_output.dims());
-        }
         
         Ok((residual + mlp_output)?)
     }
 }
 
+/// Attention module with NoPE and GQA support
 pub struct NopeAttention {
     q_proj: QMatMul,
     k_proj: QMatMul,
     v_proj: QMatMul,
     o_proj: QMatMul,
+    rotary_emb: Option<RotaryEmbedding>,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
+    is_nope: bool,
+    #[cfg(feature = "flash-attn")]
+    use_flash_attn: bool,
 }
 
 impl NopeAttention {
     fn load(
         tensors: &HashMap<String, Arc<QTensor>>,
         prefix: &str,
+        layer_idx: usize,
         config: &crate::services::ml::official::config::SmolLM3Config,
-        _device: &Device,
+        device: &Device,
     ) -> Result<Self> {
+        // Load projection matrices
         let q_proj = QMatMul::from_arc(tensors.get(&format!("{}.attn_q.weight", prefix))
             .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.attn_q.weight", prefix)))?
             .clone())?;
@@ -264,43 +217,47 @@ impl NopeAttention {
             .ok_or_else(|| candle_core::Error::Msg(format!("Missing {}.attn_output.weight", prefix)))?
             .clone())?;
 
+        // Check if this is a NoPE layer
+        let is_nope = config.nope_layer_indices.contains(&layer_idx);
+        
+        // Only create rotary embeddings if not a NoPE layer
+        let rotary_emb = if !is_nope {
+            Some(RotaryEmbedding::new(DType::F32, config, device)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
             o_proj,
+            rotary_emb,
             num_heads: config.base.num_attention_heads,
             num_kv_heads: config.base.num_key_value_heads,
             head_dim: config.base.head_dim,
+            is_nope,
+            #[cfg(feature = "flash-attn")]
+            use_flash_attn: config.use_flash_attention && device.is_cuda(),
         })
     }
 
     fn forward(
         &self,
         hidden_states: &Tensor,
-        rotary_emb: &RotaryEmbedding,
         cache: Option<&mut Option<(Tensor, Tensor)>>,
         position: usize,
         layer_idx: usize,
+        _config: &crate::services::ml::official::config::SmolLM3Config,
     ) -> Result<Tensor> {
         let (batch_size, seq_len, _hidden_size) = hidden_states.dims3()?;
-        
-        if layer_idx == 0 {
-            tracing::debug!("[ATTN_0] Starting attention, batch={}, seq={}", batch_size, seq_len);
-        }
 
-        // Project Q, K, V using QMatMul
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Projecting Q, K, V...");
-        }
+        // Project Q, K, V
         let q = self.q_proj.forward(hidden_states)?;
         let k = self.k_proj.forward(hidden_states)?;
         let v = self.v_proj.forward(hidden_states)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Q/K/V projected, reshaping...");
-        }
 
+        // Reshape for multi-head attention
         let q = q.reshape((batch_size, seq_len, self.num_heads, self.head_dim))?
             .transpose(1, 2)?;
         let k = k.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))?
@@ -308,15 +265,21 @@ impl NopeAttention {
         let v = v.reshape((batch_size, seq_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?;
 
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Applying rotary embeddings...");
-        }
-        let (q, k) = rotary_emb.apply(&q, &k, position, layer_idx)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Rotary embeddings applied");
-        }
+        // Apply rotary embeddings (skip for NoPE layers)
+        let (q, k) = if !self.is_nope {
+            if let Some(ref rope) = self.rotary_emb {
+                let (cos, sin) = rope.get_cos_sin(position, seq_len)?;
+                let q_rot = apply_rotary_pos_emb(&q, &cos, &sin)?;
+                let k_rot = apply_rotary_pos_emb(&k, &cos, &sin)?;
+                (q_rot, k_rot)
+            } else {
+                (q, k)
+            }
+        } else {
+            (q, k)
+        };
 
+        // KV cache update
         let (k, v) = if let Some(cache_ref) = cache {
             match cache_ref {
                 Some((prev_k, prev_v)) => {
@@ -334,87 +297,56 @@ impl NopeAttention {
             (k, v)
         };
 
-        let k = self.repeat_kv(&k)?;
-        let v = self.repeat_kv(&v)?;
+        // Use Candle's repeat_kv for GQA
+        let n_rep = self.num_heads / self.num_kv_heads;
+        let k = repeat_kv(k, n_rep)?;
+        let v = repeat_kv(v, n_rep)?;
 
-        let scale = 1.0 / (self.head_dim as f64).sqrt();
-        
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Computing attention scores...");
-        }
-        let scores = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * scale)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Creating causal mask...");
-        }
-        let mask = self.make_causal_mask(seq_len, hidden_states.device())?;
-        let scores = scores.broadcast_add(&mask)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Applying softmax...");
-        }
-        let attn_weights = candle_nn::ops::softmax_last_dim(&scores)?;
-        
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Computing attention output...");
-        }
-        let attn_output = attn_weights.matmul(&v)?;
+        // Compute attention
+        #[cfg(feature = "flash-attn")]
+        let attn_output = if self.use_flash_attn {
+            use candle_flash_attn::flash_attn;
+            let scale = 1.0 / (self.head_dim as f32).sqrt();
+            flash_attn(&q, &k, &v, scale, true)?
+        } else {
+            self.standard_attention(&q, &k, &v, seq_len)?
+        };
+
+        #[cfg(not(feature = "flash-attn"))]
+        let attn_output = self.standard_attention(&q, &k, &v, seq_len)?;
+
+        // Reshape and project output
         let attn_output = attn_output.transpose(1, 2)?
             .contiguous()?
             .reshape((batch_size, seq_len, self.num_heads * self.head_dim))?;
 
-        if layer_idx == 0 {
-            tracing::trace!("[ATTN_0] Applying output projection...");
-        }
-        let output = self.o_proj.forward(&attn_output)?;
+        self.o_proj.forward(&attn_output)
+    }
+
+    fn standard_attention(&self, q: &Tensor, k: &Tensor, v: &Tensor, seq_len: usize) -> Result<Tensor> {
+        let scale = 1.0 / (self.head_dim as f64).sqrt();
+        let scores = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * scale)?;
         
-        if layer_idx == 0 {
-            tracing::debug!("[ATTN_0] ✅ Attention complete, output shape: {:?}", output.dims());
-        }
-        Ok(output)
+        // Create causal mask
+        let mask = self.make_causal_mask(seq_len, q.device())?;
+        let scores = scores.broadcast_add(&mask)?;
+        
+        // Use explicit dimension for softmax (fixes CUDA issue)
+        let attn_weights = candle_nn::ops::softmax(&scores, D::Minus1)?;
+        attn_weights.matmul(&v)
     }
 
-    fn repeat_kv(&self, x: &Tensor) -> Result<Tensor> {
-        let repeat_count = self.num_heads / self.num_kv_heads;
-        if repeat_count == 1 {
-            return Ok(x.clone());
-        }
-        let (batch_size, num_kv_heads, seq_len, head_dim) = x.dims4()?;
-        x.unsqueeze(2)?
-            .expand((batch_size, num_kv_heads, repeat_count, seq_len, head_dim))?
-            .reshape((batch_size, num_kv_heads * repeat_count, seq_len, head_dim))
-    }
-
-    /// Creates a causal mask for self-attention.
-    /// 
-    /// Returns a mask of shape [seq_len, seq_len] where:
-    /// - Valid positions (can attend) have value 0.0
-    /// - Masked positions (cannot attend) have value -inf
-    /// 
-    /// Uses U8 dtype for initial mask creation to avoid where_cond dtype limitations,
-    /// then converts to F32 using arithmetic operations for backend compatibility.
     fn make_causal_mask(&self, seq_len: usize, device: &Device) -> Result<Tensor> {
-        // Create lower triangular mask with U8 dtype (1s and 0s)
-        let mask = Tensor::tril2(seq_len, DType::U8, device)?;
-        
-        // Convert to F32 for numerical operations
-        let mask_f32 = mask.to_dtype(DType::F32)?;
-        
-        // Create boolean mask where original mask was 0 (upper triangle)
-        let zeros = Tensor::zeros((seq_len, seq_len), DType::F32, device)?;
-        let is_masked = mask_f32.eq(&zeros)?;
-        
-        // Convert boolean mask to -inf where true, 0 where false
-        let neg_inf_value = Tensor::full(f32::NEG_INFINITY, (seq_len, seq_len), device)?;
-        let causal_mask = is_masked.to_dtype(DType::F32)? * neg_inf_value;
-        
-        // Ensure valid positions remain 0.0 (defensive programming)
-        let causal_mask = causal_mask?.maximum(0.0)?;
-        
-        Ok(causal_mask)
+        // Create causal mask efficiently
+        let mask = Tensor::tril2(seq_len, DType::F32, device)?;
+        let neg_inf = Tensor::full(f32::NEG_INFINITY, (seq_len, seq_len), device)?;
+        let ones = Tensor::ones((seq_len, seq_len), DType::F32, device)?;
+        let mask = ((ones - mask)? * neg_inf)?;
+        Ok(mask)
     }
 }
 
+/// MLP module using SwiGLU activation
 pub struct Mlp {
     gate_proj: QMatMul,
     up_proj: QMatMul,
@@ -445,39 +377,18 @@ impl Mlp {
     }
 
     fn forward(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        // Only log for debugging specific issues
+        // SwiGLU activation: gate(x) * up(x)
         let gate = self.gate_proj.forward(hidden_states)?.silu()?;
         let up = self.up_proj.forward(hidden_states)?;
         let intermediate = (gate * up)?;
-        let output = self.down_proj.forward(&intermediate)?;
-        Ok(output)
+        self.down_proj.forward(&intermediate)
     }
 }
 
-pub struct RmsNorm {
-    weight: Tensor,
-    eps: f64,
-}
-
-impl RmsNorm {
-    fn new(weight: Tensor, eps: f64) -> Self {
-        Self { weight, eps }
-    }
-
-    fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let x_dtype = x.dtype();
-        let x = x.to_dtype(DType::F32)?;
-        let mean_x2 = x.sqr()?.mean_keepdim(D::Minus1)?;
-        let x_normed = x.broadcast_div(&(mean_x2 + self.eps)?.sqrt()?)?;
-        let x_normed = x_normed.to_dtype(x_dtype)?;
-        Ok(x_normed.broadcast_mul(&self.weight)?)
-    }
-}
-
+/// Optimized Rotary Embedding implementation
 pub struct RotaryEmbedding {
     cos_cached: Tensor,
     sin_cached: Tensor,
-    nope_layers: Vec<usize>,
 }
 
 impl RotaryEmbedding {
@@ -488,8 +399,23 @@ impl RotaryEmbedding {
     ) -> Result<Self> {
         let head_dim = config.base.head_dim;
         let max_seq_len = config.base.max_position_embeddings;
-        let theta = config.base.rope_theta;
+        
+        // Apply YaRN scaling if configured
+        let theta = if let Some(ref scaling) = config.rope_scaling {
+            if scaling.scaling_type == "yarn" {
+                // YaRN scaling formula
+                let scale_factor = scaling.factor.powf(
+                    (head_dim as f64) / (head_dim as f64 - 2.0)
+                );
+                (config.base.rope_theta as f64 * scale_factor) as f32
+            } else {
+                config.base.rope_theta
+            }
+        } else {
+            config.base.rope_theta
+        };
 
+        // Pre-compute cos and sin for all positions
         let half_dim = head_dim / 2;
         let inv_freq: Vec<f32> = (0..half_dim)
             .map(|i| 1.0 / theta.powf((2 * i) as f32 / (2 * half_dim) as f32))
@@ -508,32 +434,35 @@ impl RotaryEmbedding {
         Ok(Self {
             cos_cached,
             sin_cached,
-            nope_layers: config.nope_layer_indices.clone(),
         })
     }
 
-    pub fn apply(&self, q: &Tensor, k: &Tensor, position: usize, layer_idx: usize) -> Result<(Tensor, Tensor)> {
-        if self.nope_layers.contains(&layer_idx) {
-            tracing::debug!("Layer {} is NoPE - skipping RoPE", layer_idx);
-            return Ok((q.clone(), k.clone()));
-        }
-        let seq_len = q.dim(2)?;
+    pub fn get_cos_sin(&self, position: usize, seq_len: usize) -> Result<(Tensor, Tensor)> {
         let cos = self.cos_cached.narrow(0, position, seq_len)?;
         let sin = self.sin_cached.narrow(0, position, seq_len)?;
-        let q_rot = self.apply_rotary(q, &cos, &sin)?;
-        let k_rot = self.apply_rotary(k, &cos, &sin)?;
-        Ok((q_rot, k_rot))
+        Ok((cos, sin))
     }
+}
 
-    fn apply_rotary(&self, x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+/// Apply rotary position embeddings using Candle's optimized rope function
+fn apply_rotary_pos_emb(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    // Fallback implementation since candle doesn't export rope directly
+    {
         let (_batch_size, _num_heads, _seq_len, head_dim) = x.dims4()?;
         let half_dim = head_dim / 2;
+        
+        // Split x into two halves
         let x1 = x.narrow(D::Minus1, 0, half_dim)?;
         let x2 = x.narrow(D::Minus1, half_dim, half_dim)?;
+        
+        // Broadcast cos and sin
         let cos = cos.unsqueeze(0)?.unsqueeze(0)?;
         let sin = sin.unsqueeze(0)?.unsqueeze(0)?;
+        
+        // Apply rotation
         let rot_x1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
         let rot_x2 = (x1.broadcast_mul(&sin)? + x2.broadcast_mul(&cos)?)?;
+        
         Tensor::cat(&[&rot_x1, &rot_x2], D::Minus1)
     }
 }

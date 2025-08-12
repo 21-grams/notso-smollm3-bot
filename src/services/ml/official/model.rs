@@ -56,7 +56,7 @@ impl SmolLM3Model {
         &mut self,
         input_ids: &Tensor,
         position: usize,
-        _kv_cache: Option<&mut crate::services::ml::smollm3::kv_cache::SmolLM3KVCache>,
+        _kv_cache: Option<&mut crate::services::ml::smollm3::kv_cache::KVCache>,
     ) -> Result<Tensor> {
         tracing::debug!("🚀 Starting forward pass at position {}", position);
         
