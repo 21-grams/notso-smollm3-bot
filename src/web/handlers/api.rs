@@ -270,8 +270,8 @@ async fn generate_response_buffered(
     match ml_service.as_mut() {
         Some(service) => {
             tracing::info!("[HANDLER] Model available, calling generate_streaming");
-            // Try to use the model with thinking mode enabled by default
-            if let Err(e) = service.generate_streaming(&message, &mut buffer, true).await {
+            // Try to use the model with thinking mode DISABLED (false = enable thinking due to inverted logic)
+            if let Err(e) = service.generate_streaming(&message, &mut buffer, false).await {
                 tracing::error!("[HANDLER] Model generation failed: {}", e);
                 // Model failed, stream fallback message with markdown
                 let error_msg = format!("⚠️ **Model generation failed**\n\n\

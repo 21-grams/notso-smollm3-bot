@@ -82,7 +82,7 @@ impl SmolLM3Config {
             num_hidden_layers: 36,
             num_attention_heads: 16,
             num_key_value_heads: 4, // GQA with 4:1 ratio
-            rms_norm_eps: 1e-5,
+            rms_norm_eps: 1e-6,  // CRITICAL: Must match GGUF model (was 1e-5)
             rope_theta: 5000000.0, // Extended context RoPE
             use_flash_attn: cfg!(feature = "flash-attn"),
             head_dim: 128, // 2048 / 16
@@ -143,7 +143,7 @@ impl SmolLM3Config {
         let num_key_value_heads = get_metadata_u32(content, &["llama.attention.head_count_kv", "n_kv_head"])
             .unwrap_or(4) as usize;
         let rms_norm_eps = get_metadata_f32(content, &["llama.attention.layer_norm_rms_epsilon", "rms_norm_eps"])
-            .unwrap_or(1e-5) as f64;
+            .unwrap_or(1e-6) as f64;  // Fixed: was 1e-5, should be 1e-6
         let rope_theta = get_metadata_f32(content, &["llama.rope.freq_base", "rope_theta"])
             .unwrap_or(5000000.0) as f32;
         let max_position_embeddings = get_metadata_u32(content, &["llama.context_length", "max_position_embeddings"])

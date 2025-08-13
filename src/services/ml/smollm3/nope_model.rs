@@ -35,9 +35,15 @@ impl NopeModel {
         let mut tensors: HashMap<String, Arc<QTensor>> = HashMap::new();
         tracing::info!("Loading {} tensors from GGUF", content.tensor_infos.len());
 
-        for (tensor_name, _tensor_info) in content.tensor_infos.iter() {
-            tracing::trace!("Loading tensor: {}", tensor_name);
+        for (tensor_name, tensor_info) in content.tensor_infos.iter() {
+            tracing::trace!("Loading tensor: {} (type: {:?})", tensor_name, tensor_info.ggml_dtype);
             let tensor = content.tensor(&mut file, tensor_name, device)?;
+            
+            // Log critical tensor types
+            if tensor_name == "token_embd.weight" {
+                tracing::info!("Embeddings tensor type: {:?}", tensor_info.ggml_dtype);
+            }
+            
             tensors.insert(tensor_name.clone(), Arc::new(tensor));
         }
 
@@ -247,7 +253,7 @@ impl NopeAttention {
         hidden_states: &Tensor,
         cache: Option<&mut Option<(Tensor, Tensor)>>,
         position: usize,
-        layer_idx: usize,
+        _layer_idx: usize,
         _config: &crate::services::ml::official::config::SmolLM3Config,
     ) -> Result<Tensor> {
         let (batch_size, seq_len, _hidden_size) = hidden_states.dims3()?;

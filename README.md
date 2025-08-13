@@ -43,6 +43,18 @@ A fully-featured, **highly optimized** chatbot implementation of SmolLM3-3B quan
   - ~100M parameter reduction
   - Memory-efficient architecture
 
+## 🔧 Latest Updates (December 2024)
+
+### Tokenizer Configuration Fix
+- ✅ **Dynamic Special Token Loading**: Loads special tokens from configuration files instead of hardcoding
+- ✅ **Correct EOS Token**: Fixed mismatch - now properly uses `<|im_end|>` (128012) instead of `<|end_of_text|>`
+- ✅ **Reserved Token Filtering**: Filters out reserved tokens (128009-128255) that were causing `\u{a0}` corruption
+- ✅ **Enhanced Decoding**: Implements proper `skip_special_tokens=true` and single-token streaming decoder
+- ✅ **Template Validation Fix**: Fixed "cannot perform containment check" errors by adding proper `is defined` guards
+- ✅ **Simplified Context**: Streamlined template context to avoid passing potentially undefined values
+- ✅ **Compilation Fix**: Resolved borrow checker issue with proper string cloning
+- ✅ **NoPE Layer Validation**: Confirmed NoPE layers correctly skip RoPE at indices [3,7,11,15,19,23,27,31,35]
+
 ## 🎯 Performance Metrics
 
 | Metric | Before Optimization | After Optimization | Improvement |

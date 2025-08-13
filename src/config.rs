@@ -42,7 +42,7 @@ impl Config {
                 .unwrap_or_else(|_| "models/HuggingFaceTB_SmolLM3-3B-Q4_K_M.gguf".to_string()),
             tokenizer_path: env::var("TOKENIZER_PATH")
                 .unwrap_or_else(|_| "models/tokenizer.json".to_string()),
-            device: DeviceConfig::Cpu,
+            device: DeviceConfig::Cpu,  // CPU-only for now
             
             max_context_length: 65536,
             thinking_mode_default: true,
@@ -55,14 +55,44 @@ impl Config {
     }
     
     pub fn to_candle_device(&self) -> candle_core::Device {
-        match &self.device {
-            DeviceConfig::Cpu => candle_core::Device::Cpu,
+        let device = match &self.device {
+            DeviceConfig::Cpu => {
+                tracing::info!("[CONFIG] Using CPU device");
+                candle_core::Device::Cpu
+            },
             DeviceConfig::Cuda(idx) => {
-                candle_core::Device::new_cuda(*idx).unwrap_or(candle_core::Device::Cpu)
-            }
+                match candle_core::Device::new_cuda(*idx) {
+                    Ok(cuda_device) => {
+                        tracing::info!("[CONFIG] ✅ Using CUDA device {}", idx);
+                        cuda_device
+                    },
+                    Err(e) => {
+                        tracing::warn!("[CONFIG] ⚠️ CUDA device {} not available: {}, falling back to CPU", idx, e);
+                        candle_core::Device::Cpu
+                    }
+                }
+            },
             DeviceConfig::Metal => {
-                candle_core::Device::new_metal(0).unwrap_or(candle_core::Device::Cpu)
+                match candle_core::Device::new_metal(0) {
+                    Ok(metal_device) => {
+                        tracing::info!("[CONFIG] ✅ Using Metal device");
+                        metal_device
+                    },
+                    Err(e) => {
+                        tracing::warn!("[CONFIG] ⚠️ Metal device not available: {}, falling back to CPU", e);
+                        candle_core::Device::Cpu
+                    }
+                }
             }
+        };
+        
+        // Log final device info
+        match device {
+            candle_core::Device::Cpu => tracing::warn!("[CONFIG] ⚠️ Running on CPU - expect slow performance!"),
+            candle_core::Device::Cuda(_) => tracing::info!("[CONFIG] ✅ Running on CUDA GPU"),
+            candle_core::Device::Metal(_) => tracing::info!("[CONFIG] ✅ Running on Metal GPU"),
         }
+        
+        device
     }
 }

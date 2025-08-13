@@ -115,9 +115,65 @@ impl MLService {
         let gen_start = std::time::Instant::now();
         
         for step in 0..max_tokens {
+            // Debug logits before sampling
+            if step < 5 {
+                // Get logits statistics
+                let logits_vec = last_logits.to_vec1::<f32>()?;
+                let max_logit = logits_vec.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let min_logit = logits_vec.iter().cloned().fold(f32::INFINITY, f32::min);
+                let mean_logit = logits_vec.iter().sum::<f32>() / logits_vec.len() as f32;
+                
+                // Check for NaN/Inf
+                let has_nan = logits_vec.iter().any(|x| x.is_nan());
+                let has_inf = logits_vec.iter().any(|x| x.is_infinite());
+                
+                tracing::info!("[DEBUG] Step {} logits: min={:.3}, max={:.3}, mean={:.3}, has_nan={}, has_inf={}",
+                    step, min_logit, max_logit, mean_logit, has_nan, has_inf);
+                
+                // Find top 5 token IDs by logit value
+                let mut indexed_logits: Vec<(usize, f32)> = logits_vec.iter()
+                    .cloned()
+                    .enumerate()
+                    .collect();
+                indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                
+                tracing::info!("[DEBUG] Top 5 tokens by logit:");
+                for i in 0..5.min(indexed_logits.len()) {
+                    let (token_id, logit) = indexed_logits[i];
+                    tracing::info!("[DEBUG]   Token {}: logit={:.3}", token_id, logit);
+                }
+            }
+            
             // Sample next token
             let next_token = self.logits_processor.sample(&last_logits)?;
             all_tokens.push(next_token);
+            
+            // Debug log first 20 generated tokens
+            if step < 20 {
+                tracing::info!("[SERVICE] Generated token ID: {} at step {}", next_token, step);
+                
+                // Check if it's a special token
+                let special_tokens = self.tokenizer.special_tokens();
+                if next_token >= special_tokens.reserved_range.0 && next_token <= special_tokens.reserved_range.1 {
+                    tracing::warn!("[SERVICE]   WARNING: Generated reserved token in range {}-{}",
+                        special_tokens.reserved_range.0, special_tokens.reserved_range.1);
+                }
+                
+                // Try to decode single token for debugging
+                if let Ok(decoded) = self.tokenizer.decode(&[next_token]) {
+                    tracing::info!("[SERVICE]   Decoded: '{}'", decoded);
+                }
+                
+                // Check specific problematic tokens
+                // Token 220 is often a leading space, 4194 is unknown
+                if next_token == 4194 {
+                    tracing::error!("[SERVICE]   ERROR: Token 4194 generated - this is likely a corrupted/invalid token");
+                } else if next_token == 220 {
+                    tracing::warn!("[SERVICE]   Token 220 generated - usually a space token");
+                } else if next_token < 10 {
+                    tracing::warn!("[SERVICE]   Very low token ID {} - might be a control token", next_token);
+                }
+            }
             
             // Check stop conditions
             if next_token == eos_token {
@@ -133,25 +189,30 @@ impl MLService {
                 in_thinking_mode = false;
                 tracing::debug!("💭 Exiting thinking mode");
             } else if !in_thinking_mode {
-                // Decode and stream visible tokens
-                let token_text = self.tokenizer.decode(&[next_token])
+                // Decode and stream visible tokens using single token decoder
+                let token_text = self.tokenizer.decode_single(next_token)
                     .map_err(|e| anyhow::anyhow!("Decode error: {}", e))?;
                 
-                // Check for excessive newlines
-                if token_text == "\n" {
-                    consecutive_newlines += 1;
-                    if consecutive_newlines > 3 {
-                        tracing::warn!("Too many newlines, stopping");
-                        break;
+                // Only process non-empty decoded text
+                if !token_text.is_empty() {
+                    // Check for excessive newlines
+                    if token_text == "\n" {
+                        consecutive_newlines += 1;
+                        if consecutive_newlines > 3 {
+                            tracing::warn!("Too many consecutive newlines, stopping generation");
+                            break;
+                        }
+                    } else {
+                        consecutive_newlines = 0;
                     }
+                    
+                    // Stream token
+                    buffer.push(&token_text).await
+                        .map_err(|e| anyhow::anyhow!("Stream error: {}", e))?;
+                    generated_count += 1;
                 } else {
-                    consecutive_newlines = 0;
+                    tracing::trace!("Skipped empty decode for token {}", next_token);
                 }
-                
-                // Stream token
-                buffer.push(&token_text).await
-                    .map_err(|e| anyhow::anyhow!("Stream error: {}", e))?;
-                generated_count += 1;
                 
                 // Yield periodically for responsiveness
                 if generated_count % 10 == 0 {
@@ -194,11 +255,32 @@ impl MLService {
             }
         }
         
-        // 6. Complete stream
+        // 6. Log decoded output for debugging
+        // Get the generated tokens (excluding prompt)
+        let generated_tokens = &all_tokens[prompt_len..];
+        if !generated_tokens.is_empty() {
+            // Try to decode the full generated response
+            if let Ok(decoded_response) = self.tokenizer.decode(generated_tokens) {
+                tracing::info!("[SERVICE] Full decoded response (first 500 chars):");
+                let preview = if decoded_response.len() > 500 {
+                    &decoded_response[..500]
+                } else {
+                    &decoded_response
+                };
+                tracing::info!("[SERVICE] {}", preview);
+            }
+            
+            // Log first 20 generated token IDs
+            let preview_count = generated_tokens.len().min(20);
+            tracing::info!("[SERVICE] First {} generated token IDs: {:?}", 
+                preview_count, &generated_tokens[..preview_count]);
+        }
+        
+        // 7. Complete stream
         buffer.complete().await
             .map_err(|e| anyhow::anyhow!("Buffer completion error: {}", e))?;
         
-        // 7. Log final statistics
+        // 8. Log final statistics
         let total_time = start_time.elapsed();
         let gen_time = gen_start.elapsed();
         
@@ -258,10 +340,17 @@ impl MLService {
         let kv_cache = KVCache::new(&config, &device)?;
         
         // Create logits processor with optimized settings
+        // TEMPORARY: Use near-greedy decoding for debugging
+        let seed = 42;
+        let temperature = 0.01;  // Near-greedy for debugging
+        let top_p = 1.0;  // No nucleus sampling
+        
+        tracing::info!("[ML_SERVICE] Sampling params: seed={}, temp={}, top_p={}", seed, temperature, top_p);
+        
         let logits_processor = LogitsProcessor::new(
-            42,        // seed
-            Some(0.8), // temperature
-            Some(0.9), // top_p
+            seed,
+            Some(temperature),
+            Some(top_p),
         );
         
         tracing::info!("[ML_SERVICE] ✅ Service initialized successfully");

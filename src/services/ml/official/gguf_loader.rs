@@ -40,9 +40,9 @@ pub fn map_smollm3_to_llama_metadata(content: &mut Content) {
         (vec!["smollm3.rope.dimension_count", "rope.dim", "rope_dim"], 
          "llama.rope.dimension_count", Value::U32(128)),
         
-        // Normalization
+        // Normalization - CRITICAL: Use correct epsilon from model (1e-6 not 1e-5!)
         (vec!["smollm3.attention.layer_norm_rms_epsilon", "rms_norm_eps", "norm_eps"], 
-         "llama.attention.layer_norm_rms_epsilon", Value::F32(1e-5)),
+         "llama.attention.layer_norm_rms_epsilon", Value::F32(1e-6)),  // Fixed: was 1e-5, should be 1e-6
     ];
     
     // Track what we find and map
