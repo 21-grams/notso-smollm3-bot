@@ -94,7 +94,17 @@ impl MLService {
             prompt_len as f64 / prefill_time.as_secs_f64());
         
         // Get last token's logits for sampling
+        tracing::info!("[SERVICE] Prompt logits shape: {:?}", prompt_logits.dims());
         let mut last_logits = prompt_logits.i((0, prompt_len - 1, ..))?;
+        tracing::info!("[SERVICE] Last logits shape: {:?}", last_logits.dims());
+        
+        // Debug: Check what the last prompt token was
+        if prompt_len > 0 {
+            let last_prompt_token = tokens[prompt_len - 1];
+            tracing::info!("[SERVICE] Last prompt token: {} ('{}')", 
+                last_prompt_token,
+                self.tokenizer.decode_single(last_prompt_token).unwrap_or_default());
+        }
         
         // 4. Initialize generation state
         let mut all_tokens = tokens.clone();
@@ -116,7 +126,7 @@ impl MLService {
         
         for step in 0..max_tokens {
             // Debug logits before sampling
-            if step < 5 {
+            if step < 10 {  // Extended debugging
                 // Get logits statistics
                 let logits_vec = last_logits.to_vec1::<f32>()?;
                 let max_logit = logits_vec.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
@@ -140,7 +150,8 @@ impl MLService {
                 tracing::info!("[DEBUG] Top 5 tokens by logit:");
                 for i in 0..5.min(indexed_logits.len()) {
                     let (token_id, logit) = indexed_logits[i];
-                    tracing::info!("[DEBUG]   Token {}: logit={:.3}", token_id, logit);
+                    let token_str = self.tokenizer.decode_single(token_id as u32).unwrap_or_else(|_| format!("<err_{}>", token_id));
+                    tracing::info!("[DEBUG]   Token {}: logit={:.3} => '{}'", token_id, logit, token_str);
                 }
             }
             
@@ -340,10 +351,10 @@ impl MLService {
         let kv_cache = KVCache::new(&config, &device)?;
         
         // Create logits processor with optimized settings
-        // TEMPORARY: Use near-greedy decoding for debugging
-        let seed = 42;
-        let temperature = 0.01;  // Near-greedy for debugging
-        let top_p = 1.0;  // No nucleus sampling
+        // Use proper sampling parameters for generation
+        let seed = 42;  // Fixed seed for debugging reproducibility
+        let temperature = 0.7;  // Reasonable temperature for balanced generation
+        let top_p = 0.9;  // Standard nucleus sampling
         
         tracing::info!("[ML_SERVICE] Sampling params: seed={}, temp={}, top_p={}", seed, temperature, top_p);
         

@@ -17,7 +17,7 @@ pub struct NopeModel {
     embed_tokens: Arc<QTensor>,
     layers: Vec<NopeLayer>,
     norm: RmsNorm,
-    lm_head: QMatMul,
+    lm_head: Arc<QTensor>,  // Store the raw tensor instead of QMatMul
     device: Device,
     config: crate::services::ml::official::config::SmolLM3Config,
     kv_cache: Vec<Option<(Tensor, Tensor)>>,
@@ -53,7 +53,9 @@ impl NopeModel {
             .clone();
 
         tracing::info!("Using tied embeddings for output projection");
-        let lm_head = QMatMul::from_arc(embed_tokens.clone())?;
+        // Store the embeddings tensor for output projection
+        // We'll handle the transpose manually in forward()
+        let lm_head = embed_tokens.clone();
 
         // Use Candle's RmsNorm
         let norm_weight = tensors.get("output_norm.weight")
@@ -110,7 +112,65 @@ impl NopeModel {
         
         // Final norm and projection
         hidden_states = self.norm.forward(&hidden_states)?;
-        let logits = self.lm_head.forward(&hidden_states)?;
+        tracing::debug!("[NOPE_MODEL] Hidden states after norm - shape: {:?}, dtype: {:?}", hidden_states.dims(), hidden_states.dtype());
+        
+        // Use dequantize for the output projection with tied embeddings
+        // The embedding matrix in GGUF is stored as [vocab_size, hidden_size]
+        let lm_head_weights = self.lm_head.dequantize(&self.device)?;
+        tracing::debug!("[NOPE_MODEL] LM head weights shape: {:?}", lm_head_weights.dims());
+        
+        // Verify the shape is [vocab_size, hidden_size]
+        let (vocab_size, hidden_size_weights) = match lm_head_weights.dims() {
+            &[v, h] => (v, h),
+            _ => return Err(candle_core::Error::Msg(
+                format!("Invalid lm_head shape: {:?}, expected [vocab_size, hidden_size]", lm_head_weights.dims())
+            )),
+        };
+        
+        // Get hidden states dimensions
+        let (batch_size, seq_len, hidden_size) = match hidden_states.dims() {
+            &[b, s, h] => (b, s, h),
+            _ => return Err(candle_core::Error::Msg(
+                format!("Invalid hidden_states shape: {:?}", hidden_states.dims())
+            )),
+        };
+        
+        // Verify dimensions match
+        if hidden_size != hidden_size_weights {
+            return Err(candle_core::Error::Msg(
+                format!("Hidden size mismatch: hidden_states has {} but weights have {}", 
+                    hidden_size, hidden_size_weights)
+            ));
+        }
+        
+        // For output projection with tied embeddings:
+        // hidden_states: [batch_size, seq_len, hidden_size]
+        // lm_head_weights: [vocab_size, hidden_size]
+        // We need: [batch_size, seq_len, hidden_size] @ [hidden_size, vocab_size]
+        // So we transpose lm_head_weights to [hidden_size, vocab_size]
+        let weights_transposed = lm_head_weights.t()?;
+        tracing::debug!("[NOPE_MODEL] Transposed weights shape: {:?}", weights_transposed.dims());
+        
+        // Perform the matrix multiplication
+        // Reshape to 2D for matmul: [batch * seq_len, hidden_size]
+        let hidden_2d = hidden_states.reshape((batch_size * seq_len, hidden_size))?;
+        tracing::debug!("[NOPE_MODEL] Hidden 2D shape: {:?}", hidden_2d.dims());
+        
+        // Matmul: [batch * seq_len, hidden_size] @ [hidden_size, vocab_size] = [batch * seq_len, vocab_size]
+        let logits_2d = hidden_2d.matmul(&weights_transposed)?;
+        tracing::debug!("[NOPE_MODEL] Logits 2D shape: {:?}", logits_2d.dims());
+        
+        // Reshape back to [batch_size, seq_len, vocab_size]
+        let logits = logits_2d.reshape((batch_size, seq_len, vocab_size))?;
+        tracing::debug!("[NOPE_MODEL] Logits shape: {:?}, dtype: {:?}", logits.dims(), logits.dtype());
+        
+        // Check if logits need scaling or dtype conversion
+        let logits = if logits.dtype() != DType::F32 {
+            tracing::warn!("[NOPE_MODEL] Converting logits from {:?} to F32", logits.dtype());
+            logits.to_dtype(DType::F32)?
+        } else {
+            logits
+        };
         
         tracing::debug!("[NOPE_MODEL] Forward pass complete in {:?}", start_time.elapsed());
         Ok(logits)

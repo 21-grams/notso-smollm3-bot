@@ -45,6 +45,14 @@ A fully-featured, **highly optimized** chatbot implementation of SmolLM3-3B quan
 
 ## 🔧 Latest Updates (December 2024)
 
+### Critical Generation Pipeline Fix (NEW)
+- ✅ **Fixed Token 4194 Issue**: Eliminated corrupted token generation causing \u{a0} errors
+- ✅ **Reserved Token Filtering**: Blocks tokens 128009-128255 from generation
+- ✅ **Proper LogitsProcessor Usage**: Implemented Candle 0.9.1 Sampling enum correctly
+- ✅ **NaN/Inf Handling**: Added numerical stability checks in logits
+- ✅ **Enhanced Repetition Penalty**: Correctly applies to generated tokens only
+- ✅ **Post-Sampling Validation**: Catches and corrects invalid tokens
+
 ### Tokenizer Configuration Fix
 - ✅ **Dynamic Special Token Loading**: Loads special tokens from configuration files instead of hardcoding
 - ✅ **Correct EOS Token**: Fixed mismatch - now properly uses `<|im_end|>` (128012) instead of `<|end_of_text|>`

@@ -163,8 +163,13 @@ impl SmolLM3Tokenizer {
             .ok_or_else(|| anyhow::anyhow!("Missing <think> token"))?;
         let thinking_end_id = get_token_id("</think>")
             .ok_or_else(|| anyhow::anyhow!("Missing </think> token"))?;
+        // Official SmolLM3 uses token 128004 for padding
+        let _pad_id = 128004;  // Official pad_token_id from config.json
+        
+        // Try to verify it exists, fall back to official ID if not found
         let pad_id = get_token_id("<|finetune_right_pad_id|>")
-            .unwrap_or(im_end_id);  // Use im_end as fallback for padding
+            .or_else(|| get_token_id("<|pad|>"))
+            .unwrap_or(128004);  // Use official pad token ID 128004
         
         // Verify critical tokens match expected IDs
         tracing::info!("[TOKENIZER] Token ID verification:");
@@ -173,6 +178,7 @@ impl SmolLM3Tokenizer {
         tracing::info!("  <|begin_of_text|>: {} (expected 128000)", begin_of_text_id);
         tracing::info!("  <think>: {} (expected 128002)", thinking_start_id);
         tracing::info!("  </think>: {} (expected 128003)", thinking_end_id);
+        tracing::info!("  pad: {} (expected 128004)", pad_id);
         
         // Verify the tokenizer recognizes these as single tokens
         if let Ok(test_ids) = tokenizer.encode("<|im_start|>", false) {
@@ -232,6 +238,19 @@ impl SmolLM3Tokenizer {
         
         let clean_up_spaces = config.clean_up_tokenization_spaces.unwrap_or(true);
         
+        // Diagnostic: Test common word encoding/decoding
+        tracing::info!("[TOKENIZER] Testing vocabulary alignment:");
+        let test_words = vec!["Hello", "hello", "Hi", "hi", "How", "are", "you", "I", "am", "good"];
+        for word in test_words {
+            if let Ok(encoded) = tokenizer.encode(word, false) {
+                let token_ids = encoded.get_ids();
+                if !token_ids.is_empty() {
+                    let decoded = tokenizer.decode(token_ids, false).unwrap_or("<decode_error>".to_string());
+                    tracing::info!("  '{}' -> {:?} -> '{}'", word, token_ids, decoded);
+                }
+            }
+        }
+        
         Ok(Self {
             tokenizer,
             special_tokens,
@@ -260,6 +279,11 @@ impl SmolLM3Tokenizer {
     
     /// Get a specific special token ID dynamically
     pub fn get_special_token_id(&self, token: &str) -> Option<u32> {
+        self.tokenizer.token_to_id(token)
+    }
+    
+    /// Get token ID from string (wrapper for tokenizer.token_to_id)
+    pub fn token_to_id(&self, token: &str) -> Option<u32> {
         self.tokenizer.token_to_id(token)
     }
     
@@ -379,16 +403,16 @@ impl SmolLM3Tokenizer {
         template.push_str(&input);
         template.push_str("<|im_end|>\n");
         
-        // Start assistant response
-        template.push_str("<|im_start|>assistant\n");
+        // Start assistant response (no newline - model expects to start generating immediately)
+        template.push_str("<|im_start|>assistant");
         
-        // Add thinking prefix if enabled (inverted logic)
-        if !thinking_enabled {
+        // Add thinking prefix if enabled
+        if thinking_enabled {
             template.push_str("<think>\n");
         }
         
         tracing::info!("[TOKENIZER] Using ChatML template format");
-        tracing::info!("[TOKENIZER] Thinking mode: {} (inverted logic)", thinking_enabled);
+        tracing::info!("[TOKENIZER] Thinking mode: {}", thinking_enabled);
         tracing::info!("[TOKENIZER] Template output (first 500 chars):\n{}", 
             if template.len() > 500 { &template[..500] } else { &template });
         

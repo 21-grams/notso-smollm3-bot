@@ -22,6 +22,10 @@ path = "src/bin/inspect_gguf.rs"
 name = "test_q4k"
 path = "src/bin/test_q4k.rs"
 
+[[bin]]
+name = "test_enhanced"
+path = "src/bin/test_enhanced.rs"
+
 [dependencies]
 # Core ML - Official Candle (v0.9.1 - DO NOT DOWNGRADE)
 candle-core = { version = "0.9", default-features = false }
